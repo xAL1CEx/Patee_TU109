@@ -26,6 +26,13 @@ function cleanMeta(meta = {}) {
   if ("name" in meta) out.name = str(meta.name, 60) || "กลุ่มใหม่";
   if ("kind" in meta) out.kind = KINDS.includes(meta.kind) ? meta.kind : "กลุ่ม";
   if ("dates" in meta) out.dates = str(meta.dates, 40);
+  // Optional start/end days (YYYY-MM-DD). The end may not be before the start.
+  if ("start" in meta || "end" in meta) {
+    const day = v => { const s = str(v, 10); if (!s) return ""; if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || isNaN(Date.parse(s))) throw new HttpError(400, "bad_dates"); return s; };
+    out.start = day(meta.start); out.end = day(meta.end);
+    if (out.end && !out.start) throw new HttpError(400, "bad_dates");
+    if (out.start && out.end && out.end < out.start) throw new HttpError(400, "bad_dates");
+  }
   if ("activities" in meta) {
     const a = Array.isArray(meta.activities) ? meta.activities : [];
     out.activities = [...new Set(a.map(x => str(x, 30)).filter(Boolean))].slice(0, 50);

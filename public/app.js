@@ -43,6 +43,24 @@ const baht=(n,d)=>'฿'+Number(n).toLocaleString('th-TH',{minimumFractionDigits:
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const nowISO=()=>new Date().toISOString();
 const todayDate=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+// "1–3 ธ.ค." / "30 พ.ย. – 2 ธ.ค." / "5 ม.ค." from YYYY-MM-DD days
+const fmtRange=(s,e)=>{if(!s)return '';if(!e||e===s)return fmtD(s);const a=new Date(s+'T00:00:00'),b=new Date(e+'T00:00:00');
+  return a.getMonth()===b.getMonth()&&a.getFullYear()===b.getFullYear()?a.getDate()+'–'+fmtD(e):fmtD(s)+' – '+fmtD(e)};
+function dateFields(px,t={}){
+  return `<div class="two"><label class="f">วันเริ่ม<input class="inp" type="date" id="${px}-start" value="${esc(t.start||'')}"></label>
+   <label class="f">วันสุดท้าย<input class="inp" type="date" id="${px}-end" value="${esc(t.end||'')}" ${t.start?`min="${esc(t.start)}"`:''}></label></div>`;
+}
+function wireDates(sh,px){
+  const s=sh.querySelector('#'+px+'-start'),e=sh.querySelector('#'+px+'-end');
+  s.onchange=()=>{e.min=s.value;if(s.value&&(!e.value||e.value<s.value))e.value=s.value};
+}
+// -> {start,end,dates}, or null (after a toast) when the days don't make sense
+function readDates(sh,px){
+  const start=sh.querySelector('#'+px+'-start').value,end=sh.querySelector('#'+px+'-end').value;
+  if(end&&!start){toast('เลือกวันเริ่มก่อน');return null}
+  if(start&&end&&end<start){toast('วันสุดท้ายต้องไม่ก่อนวันเริ่ม');return null}
+  return {start,end:start?(end||start):'',dates:fmtRange(start,end||start)};
+}
 const fmtD=iso=>{if(!iso)return '';const d=new Date(iso.length===10?iso+'T00:00:00':iso);return isNaN(d)?'':d.getDate()+' '+TH_M[d.getMonth()]};
 const addMonths=(iso,n)=>{const d=new Date(iso);d.setMonth(d.getMonth()+n);return d.toISOString()};
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
@@ -67,7 +85,7 @@ function adopt(g){
   const e=entry(g.id); if(e){e.name=g.name; e.kind=g.kind} else groups.push({id:g.id,name:g.name,kind:g.kind,dates:g.dates});
   const mem=g.members||{};
   const order=Object.keys(mem).sort((a,b)=>(mem[a].joinedAt||'').localeCompare(mem[b].joinedAt||''));
-  D={people:mem,trips:{[g.id]:{id:g.id,name:g.name,kind:g.kind,dates:g.dates,members:order,activities:g.activities||[],createdAt:g.createdAt}},
+  D={people:mem,trips:{[g.id]:{id:g.id,name:g.name,kind:g.kind,dates:g.dates,start:g.start||'',end:g.end||'',members:order,activities:g.activities||[],createdAt:g.createdAt}},
      expenses:g.expenses||{},payments:g.payments||{},plans:g.plans||{},reminders:g.reminders||{}};
   scheduleRender();
 }
@@ -132,7 +150,7 @@ function send(ops){
 const COLMAP={people:'members',expenses:'expenses',payments:'payments',plans:'plans',reminders:'reminders'};
 function put(col,obj){
   const {id,...doc}=obj;
-  if(col==='trips')return send([{op:'meta',doc:{name:doc.name,kind:doc.kind,dates:doc.dates,activities:doc.activities}}]);
+  if(col==='trips')return send([{op:'meta',doc:{name:doc.name,kind:doc.kind,dates:doc.dates,start:doc.start,end:doc.end,activities:doc.activities}}]);
   return send([{op:'put',col:COLMAP[col],id,doc}]);
 }
 function del(col,id){return send([{op:'del',col:COLMAP[col],id}])}
@@ -151,13 +169,32 @@ function balances(t){
   for(const k in net)net[k]=r2(net[k]);
   return net;
 }
+// Who owes whom, pair by pair: for each expense, everyone in the split owes their share to the payer;
+// a payment from A to B pays down what A owes B. Each pair is netted, so it can be traced item by item.
 function settle(t){
-  const net=balances(t),cr=[],db=[];
-  for(const k in net){if(net[k]>0.009)cr.push([k,net[k]]);else if(net[k]<-0.009)db.push([k,-net[k]])}
-  cr.sort((a,b)=>b[1]-a[1]);db.sort((a,b)=>b[1]-a[1]);
-  const out=[];let i=0,j=0;
-  while(i<db.length&&j<cr.length){const a=Math.min(db[i][1],cr[j][1]);out.push({from:db[i][0],to:cr[j][0],amount:r2(a)});db[i][1]-=a;cr[j][1]-=a;if(db[i][1]<0.01)i++;if(cr[j][1]<0.01)j++}
-  return out;
+  const owe={};const add=(a,b,v)=>{if(a===b||!v)return;owe[a+'|'+b]=(owe[a+'|'+b]||0)+v};
+  texp(t).forEach(e=>{for(const k in e.split)add(k,e.payer,e.split[k])});
+  tpay(t).forEach(p=>add(p.from,p.to,-p.amount));
+  const out=[],seen=new Set();
+  for(const key in owe){const[a,b]=key.split('|'),pk=[a,b].sort().join('|');if(seen.has(pk))continue;seen.add(pk);
+    const v=r2((owe[a+'|'+b]||0)-(owe[b+'|'+a]||0));
+    if(v>0.009)out.push({from:a,to:b,amount:v});else if(v<-0.009)out.push({from:b,to:a,amount:-v})}
+  return out.sort((x,y)=>y.amount-x.amount);
+}
+// Everything between me and one other person, oldest first. sign>0: they owe me more; <0: I owe them more.
+function ledger(t,other){
+  const rows=[];
+  texp(t).forEach(e=>{
+    if(e.payer===me&&e.split?.[other])rows.push({kind:'exp',e,v:e.split[other],date:e.date||e.createdAt});
+    else if(e.payer===other&&e.split?.[me])rows.push({kind:'exp',e,v:-e.split[me],date:e.date||e.createdAt});
+  });
+  tpay(t).forEach(p=>{
+    if(p.from===other&&p.to===me)rows.push({kind:'pay',p,v:-p.amount,date:p.createdAt});
+    else if(p.from===me&&p.to===other)rows.push({kind:'pay',p,v:p.amount,date:p.createdAt});
+  });
+  rows.sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+  let run=0;rows.forEach(r=>{run=r2(run+r.v);r.run=run});
+  return {rows,net:run};
 }
 function planInfo(pl){
   const pays=Object.values(D.payments).filter(p=>p.plan===pl.id);
@@ -237,18 +274,38 @@ function render(){
   v.innerHTML=top+({home:vHome,list:vList,sum:vSum,settle:vSettle})[tab](t);
 }
 
-function personFields(p,px='pf'){
+// Receive money by ONE method: PromptPay or a bank account. Required for your own account,
+// optional for a friend you add who doesn't use the app.
+function personFields(p,px='pf',required=true){
+  const pay=p.pay||(p.pp?'pp':p.acct?'bank':'pp');
   return `<label class="f">ชื่อเล่น<input class="inp" id="${px}-name" value="${esc(p.name||'')}" placeholder="เช่น ต้น" maxlength="30" autocomplete="nickname"></label>
-  <label class="f">พร้อมเพย์ (เบอร์โทรหรือเลขบัตรประชาชน)<input class="inp num" id="${px}-pp" value="${esc(p.pp||'')}" inputmode="numeric" placeholder="0812345678"></label>
-  <div class="two"><label class="f">ธนาคาร<select class="inp" id="${px}-bank"><option value="">ไม่ระบุ</option>${BANKS.map(b=>`<option ${b===p.bank?'selected':''}>${b}</option>`).join('')}</select></label>
-  <label class="f">เลขบัญชี<input class="inp num" id="${px}-acct" value="${esc(p.acct||'')}" inputmode="numeric" placeholder="xxx-x-xxxxx-x"></label></div>`;
+  <div class="f payset" id="${px}-payset" data-cur="${pay}"><span>รับเงินผ่าน${required?'':' (ไม่ใส่ก็ได้)'}</span>
+   <div class="seg"><button type="button" data-paymethod="pp" aria-pressed="${pay==='pp'}">พร้อมเพย์</button><button type="button" data-paymethod="bank" aria-pressed="${pay==='bank'}">บัญชีธนาคาร</button></div></div>
+  <label class="f" data-paybox="pp" ${pay==='pp'?'':'hidden'}>เบอร์พร้อมเพย์ หรือเลขบัตรประชาชน<input class="inp num" id="${px}-pp" value="${esc(p.pp||'')}" inputmode="numeric" placeholder="0812345678" maxlength="17"></label>
+  <div class="two" data-paybox="bank" ${pay==='bank'?'':'hidden'}><label class="f">ธนาคาร<select class="inp" id="${px}-bank"><option value="">เลือกธนาคาร</option>${BANKS.map(b=>`<option ${b===p.bank?'selected':''}>${b}</option>`).join('')}</select></label>
+  <label class="f">เลขบัญชี<input class="inp num" id="${px}-acct" value="${esc(p.acct||'')}" inputmode="numeric" placeholder="xxx-x-xxxxx-x" maxlength="20"></label></div>`;
 }
-function readPerson(root,px='pf'){
+document.addEventListener('click',e=>{
+  const b=e.target.closest('[data-paymethod]');if(!b)return;
+  const set=b.closest('.payset'),pay=b.dataset.paymethod;set.dataset.cur=pay;
+  set.querySelectorAll('[data-paymethod]').forEach(x=>x.setAttribute('aria-pressed',x===b));
+  set.parentElement.querySelectorAll('[data-paybox]').forEach(x=>x.hidden=x.dataset.paybox!==pay);
+});
+const validAcct=v=>{const n=String(v||'').replace(/\D/g,'').length;return n>=10&&n<=15&&!/[^\d\s-]/.test(v)};
+function readPerson(root,px='pf',required=true){
   const g=k=>root.querySelector('#'+px+'-'+k).value.trim();
-  const p={name:g('name'),pp:g('pp').replace(/[^\d]/g,''),bank:g('bank'),acct:g('acct')};
-  if(!p.name){toast('ใส่ชื่อเล่นก่อน');return null}
-  if(p.pp&&!validPP(p.pp)){toast('พร้อมเพย์ต้องเป็นเบอร์ 10 หลัก หรือเลขบัตร 13 หลัก');return null}
-  return p;
+  const name=g('name'),pay=root.querySelector('#'+px+'-payset').dataset.cur;
+  if(!name){toast('ใส่ชื่อเล่นก่อน');return null}
+  if(pay==='pp'){
+    const pp=g('pp').replace(/[^\d]/g,'');
+    if(!pp&&required){toast('ใส่เบอร์พร้อมเพย์ก่อน');return null}
+    if(pp&&!validPP(pp)){toast('พร้อมเพย์ต้องเป็นเบอร์ 10 หลัก หรือเลขบัตร 13 หลัก');return null}
+    return {name,pay,pp,bank:'',acct:''};
+  }
+  const bank=g('bank'),acct=g('acct');
+  if((required||acct)&&!bank){toast('เลือกธนาคารก่อน');return null}
+  if((required||bank)&&!validAcct(acct)){toast('เลขบัญชีต้องเป็นตัวเลข 10–15 หลัก');return null}
+  return {name,pay,pp:'',bank,acct};
 }
 
 function vAuth(){
@@ -262,13 +319,13 @@ function vAuth(){
       <label class="f">ชื่อผู้ใช้<input class="inp" id="au-user" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="20" placeholder="${reg?'a-z, 0-9, _ หรือ . (3–20 ตัว)':''}"></label>
       <label class="f">รหัสผ่าน<input class="inp" id="au-pass" type="password" autocomplete="${reg?'new-password':'current-password'}" maxlength="200" placeholder="${reg?'อย่างน้อย 8 ตัวอักษร':''}"></label>
       ${reg?`<label class="f">ยืนยันรหัสผ่าน<input class="inp" id="au-pass2" type="password" autocomplete="new-password" maxlength="200"></label>
-        <hr class="sep"><h2>โปรไฟล์ของคุณ</h2><p class="muted" style="margin:0">เพื่อนในกลุ่มจะเห็นชื่อเล่น พร้อมเพย์ และเลขบัญชีนี้ไว้โอนคืนคุณ</p>${personFields({})}`:''}
+        <hr class="sep"><h2>โปรไฟล์ของคุณ</h2><p class="muted" style="margin:0">เพื่อนในกลุ่มจะเห็นชื่อเล่น และช่องทางรับเงินนี้ไว้โอนคืนคุณ</p>${personFields({})}`:''}
       <button class="btn block" type="submit" id="au-go">${reg?'สมัครและเริ่มใช้งาน':'เข้าสู่ระบบ'}</button>
     </form>
   </div>`;
 }
 const AUTH_ERR={username_taken:'ชื่อผู้ใช้นี้มีคนใช้แล้ว ลองชื่ออื่น',bad_username:'ชื่อผู้ใช้ใช้ได้เฉพาะ a-z, 0-9, _ และ . ยาว 3–20 ตัว',bad_password:'รหัสผ่านต้องยาวอย่างน้อย 8 ตัวอักษร',
-  wrong_login:'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง',too_many_attempts:'ลองผิดหลายครั้งเกินไป รอ 10 นาทีแล้วลองใหม่',bad_name:'ใส่ชื่อเล่นก่อน',bad_promptpay:'พร้อมเพย์ต้องเป็นเบอร์ 10 หลัก หรือเลขบัตร 13 หลัก',offline:'ไม่มีอินเทอร์เน็ต'};
+  wrong_login:'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง',too_many_attempts:'ลองผิดหลายครั้งเกินไป รอ 10 นาทีแล้วลองใหม่',bad_name:'ใส่ชื่อเล่นก่อน',bad_promptpay:'พร้อมเพย์ต้องเป็นเบอร์ 10 หลัก หรือเลขบัตร 13 หลัก',bad_bank:'เลือกธนาคารก่อน',bad_acct:'เลขบัญชีต้องเป็นตัวเลข 10–15 หลัก',offline:'ไม่มีอินเทอร์เน็ต'};
 async function submitAuth(form){
   const reg=authTab==='register',btn=form.querySelector('#au-go');
   const username=form.querySelector('#au-user').value.trim().toLowerCase(),password=form.querySelector('#au-pass').value;
@@ -356,10 +413,15 @@ function vHome(t){
   ${alerts(t)}
   <section><div class="sec-h"><h2>รายการล่าสุด</h2>${ex.length?'<button class="link" data-tab="list">ดูทั้งหมด</button>':''}</div>
     <div class="box list">${ex.slice(-4).reverse().map(expRow).join('')||`<div class="empty">ยังไม่มีค่าใช้จ่าย<button class="btn sm" data-open="addExp">เพิ่มรายการแรก</button></div>`}</div></section>
-  <section><div class="sec-h"><h2>ยอดของแต่ละคน</h2></div>
-    <div class="box list">${t.members.map(m=>{const v=net[m]||0;return `<div class="row">${av(m,'lg')}<div class="grow"><div class="t">${esc(P(m).name)}${m===me?' (คุณ)':''}</div></div>
-      <span class="amt num ${v>0.009?'pos-t':v<-0.009?'neg-t':''}">${v>0?'+':''}${baht(v)}</span>
-      <span class="state ${v>0.009?'pos':v<-0.009?'neg':''}">${v>0.009?'ได้คืน':v<-0.009?'ต้องจ่าย':'เคลียร์แล้ว'}</span></div>`}).join('')}</div></section>`;
+  <section><div class="sec-h"><h2>ยอดระหว่างคุณกับเพื่อน</h2></div>
+    <div class="box list">${(()=>{
+      const rows=t.members.filter(m=>m!==me).map(m=>({m,...ledger(t,m)})).filter(x=>x.rows.length)
+        .sort((a,b)=>Math.abs(b.net)-Math.abs(a.net));
+      return rows.map(({m,net:v})=>`<button class="row" data-ledger="${m}">${av(m,'lg')}<div class="grow"><div class="t">${esc(P(m).name)}</div>
+        <div class="muted">${v>0.009?'ค้างคุณอยู่':v<-0.009?'คุณค้างอยู่':'เคลียร์กันแล้ว'}</div></div>
+        <span class="amt num ${v>0.009?'pos-t':v<-0.009?'neg-t':''}">${baht(Math.abs(v),2)}</span>${ic('chev',16)}</button>`).join('')
+        ||'<div class="empty">ยังไม่มีรายการที่เกี่ยวกับคุณกับเพื่อนคนไหน</div>';
+    })()}</div></section>`;
 }
 
 function vList(t){
@@ -398,14 +460,14 @@ function vSettle(t){
     const pl=activePlan(t,s.from,s.to),info=pl&&planInfo(pl);
     const iPay=s.from===me,iGet=s.to===me;
     return `<div class="row">${av(s.from,'lg')}<span class="muted">${ic('chev',14)}</span>${av(s.to,'lg')}
-      <div class="grow"><div class="t">${esc(nm(s.from))} → ${esc(nm(s.to))}</div>
+      <div class="grow" ${iPay||iGet?`data-ledgerrow="${iPay?s.to:s.from}" style="cursor:pointer"`:''}><div class="t">${esc(nm(s.from))} → ${esc(nm(s.to))}</div>
       <div class="muted">${pl?`ผ่อน ${info.count}/${pl.months} งวด`:iPay?'คุณต้องจ่าย':iGet?'รอรับเงิน':''}</div></div>
       <div style="display:grid;justify-items:end;gap:4px"><b class="num ${iPay?'neg-t':iGet?'pos-t':''}">${baht(s.amount,2)}</b>
       ${iPay?`<button class="btn sm" data-pay="${s.from}|${s.to}">จ่าย</button>`:iGet?`<button class="btn sm line" data-remind="${s.from}">ทวง</button>`:''}</div></div>`;
   };
   const plans=Object.values(D.plans).filter(p=>p.trip===t.id&&!planInfo(p).done);
   const pend=tpay(t).filter(p=>p.to===me&&!p.confirmed);
-  return `<div><h1>เคลียร์เงิน</h1><div class="muted">คำนวณให้โอนน้อยครั้งที่สุดแล้ว</div></div>
+  return `<div><h1>เคลียร์เงิน</h1><div class="muted">แยกยอดตามคู่ แตะชื่อเพื่อดูว่ามาจากรายการไหน</div></div>
   ${pend.length?`<section><div class="sec-h"><h2>รอคุณยืนยันว่าได้รับเงิน</h2></div><div class="box list">${pend.map(p=>`<div class="row">${av(p.from,'lg')}<div class="grow"><div class="t">${esc(P(p.from).name)} โอนให้คุณ</div><div class="muted num">${baht(p.amount,2)} · ${fmtD(p.createdAt)}</div></div>
      <button class="btn sm line" data-reject="${p.id}">ยังไม่ได้รับ</button><button class="btn sm" data-confirm="${p.id}">ได้รับแล้ว</button></div>`).join('')}</div></section>`:''}
   <section><div class="sec-h"><h2>ที่เกี่ยวกับคุณ</h2></div><div class="box list">${mine.map(line).join('')||'<div class="empty">คุณไม่มียอดค้างในกลุ่มนี้</div>'}</div></section>
@@ -450,18 +512,19 @@ function sheetCreate(){
   let acts=['ทั่วไป'];
   openSheet('สร้างกลุ่มใหม่',`
    <label class="f">ชื่อกลุ่ม<input class="inp" id="cg-name" placeholder="เช่น ทริปเกาะล้าน" maxlength="60"></label>
-   <div class="two"><label class="f">ประเภท<select class="inp" id="cg-kind">${KINDS.map(k=>`<option>${k}</option>`).join('')}</select></label>
-   <label class="f">วันที่ / รอบ<input class="inp" id="cg-dates" placeholder="เช่น 1–3 ธ.ค." maxlength="40"></label></div>
+   <label class="f">ประเภท<select class="inp" id="cg-kind">${KINDS.map(k=>`<option>${k}</option>`).join('')}</select></label>
+   ${dateFields('cg')}
    <p class="muted" style="margin:0">สร้างแล้วจะได้ QR เชิญ ให้เพื่อนสแกนเข้ากลุ่มด้วยมือถือของตัวเอง</p>
    <button class="btn block" id="cg-go">สร้างกลุ่ม</button>`,sh=>{
-    const go=sh.querySelector('#cg-go');
+    const go=sh.querySelector('#cg-go');wireDates(sh,'cg');
     go.onclick=async()=>{
       const name=sh.querySelector('#cg-name').value.trim();if(!name){toast('ใส่ชื่อกลุ่มก่อน');return}
+      const dt=readDates(sh,'cg');if(!dt)return;
       go.disabled=true;go.textContent='กำลังสร้าง…';
       try{
-        const r=await api('/groups',{method:'POST',body:JSON.stringify({meta:{name,kind:sh.querySelector('#cg-kind').value,dates:sh.querySelector('#cg-dates').value.trim(),activities:acts}})});
+        const r=await api('/groups',{method:'POST',body:JSON.stringify({meta:{name,kind:sh.querySelector('#cg-kind').value,...dt,activities:acts}})});
         tab='home';adopt(r.group);closeSheet();sheetInvite();
-      }catch(e){go.disabled=false;go.textContent='สร้างกลุ่ม';toast(e.code==='offline'?'ไม่มีอินเทอร์เน็ต':'สร้างกลุ่มไม่สำเร็จ ลองใหม่')}
+      }catch(e){go.disabled=false;go.textContent='สร้างกลุ่ม';toast(e.code==='offline'?'ไม่มีอินเทอร์เน็ต':e.code==='bad_dates'?'วันที่ไม่ถูกต้อง':'สร้างกลุ่มไม่สำเร็จ ลองใหม่')}
     };
     setTimeout(()=>sh.querySelector('#cg-name').focus(),60);
   });
@@ -519,22 +582,22 @@ function sheetTripEdit(){
   const isOwner=G.owner===me;
   openSheet('ตั้งค่ากลุ่ม',`
    <label class="f">ชื่อ<input class="inp" id="te-name" value="${esc(t.name)}" maxlength="60"></label>
-   <div class="two"><label class="f">ประเภท<select class="inp" id="te-kind">${KINDS.map(k=>`<option ${k===t.kind?'selected':''}>${k}</option>`).join('')}</select></label>
-   <label class="f">วันที่ / รอบ<input class="inp" id="te-dates" value="${esc(t.dates||'')}" maxlength="40"></label></div>
+   <label class="f">ประเภท<select class="inp" id="te-kind">${KINDS.map(k=>`<option ${k===t.kind?'selected':''}>${k}</option>`).join('')}</select></label>
+   ${dateFields('te',t)}${t.dates&&!t.start?`<p class="note" style="margin:0">วันที่เดิม: ${esc(t.dates)} (เลือกวันใหม่จากปฏิทินได้)</p>`:''}
    <div class="label">กิจกรรมย่อย (ใช้แยกรายการ)</div><div class="chips" id="te-acts"></div>
    <div style="display:flex;gap:8px"><input class="inp" id="te-act" placeholder="เช่น ล่องแพ" maxlength="30"><button class="btn line" id="te-addact">เพิ่ม</button></div>
    <button class="btn block" id="te-save">บันทึก</button>
    <hr class="sep">
    <div class="sec-h" style="margin:0"><h2>สมาชิก</h2><button class="link" id="te-inv">เชิญด้วย QR</button></div>
    <div class="box list" id="te-mem"></div>
-   <details class="box" style="padding:12px 14px"><summary style="cursor:pointer;font-weight:600">+ เพิ่มเพื่อนที่ไม่ได้ใช้แอป</summary><div style="display:grid;gap:10px;margin-top:12px"><p class="muted" style="margin:0">ถ้าเพื่อนคนนี้มาใช้แอปทีหลัง ตอนสแกนเข้ากลุ่มให้แตะ "ฉันคือ…" เพื่อรับชื่อนี้ไป</p>${personFields({},'nf')}<button class="btn line" id="nf-go">เพิ่มเพื่อนคนนี้</button></div></details>
+   <details class="box" style="padding:12px 14px"><summary style="cursor:pointer;font-weight:600">+ เพิ่มเพื่อนที่ไม่ได้ใช้แอป</summary><div style="display:grid;gap:10px;margin-top:12px"><p class="muted" style="margin:0">ถ้าเพื่อนคนนี้มาใช้แอปทีหลัง ตอนสแกนเข้ากลุ่มให้แตะ "ฉันคือ…" เพื่อรับชื่อนี้ไป</p>${personFields({},'nf',false)}<button class="btn line" id="nf-go">เพิ่มเพื่อนคนนี้</button></div></details>
    <hr class="sep">
    <button class="btn line block" id="te-leave">ออกจากกลุ่มนี้</button>
    ${isOwner?'<button class="btn danger block" id="te-del">ลบกลุ่มนี้ทั้งหมด</button>':''}`,sh=>{
     const drawActs=()=>sh.querySelector('#te-acts').innerHTML=acts.map((a,i)=>`<span>${esc(a)}<button data-rm="${i}" aria-label="ลบ ${esc(a)}">${ic('x',12)}</button></span>`).join('')||'<span class="muted">ยังไม่มี</span>';
     const drawMem=()=>sh.querySelector('#te-mem').innerHTML=trip().members.map(m=>`<div class="row">${av(m,'lg')}<div class="grow"><div class="t">${esc(P(m).name)}${m===me?' (คุณ)':''}</div><div class="muted">${m===G.owner?'คนสร้างกลุ่ม':P(m).claimed?'ใช้แอปอยู่':'ยังไม่ได้ใช้แอป'}</div></div>
       ${m!==me&&!P(m).claimed&&!involved(t,m)?`<button class="x" data-kick="${m}" aria-label="เอา ${esc(P(m).name)} ออก">${ic('x',14)}</button>`:''}</div>`).join('');
-    drawActs();drawMem();
+    drawActs();drawMem();wireDates(sh,'te');
     sh.querySelector('#te-acts').onclick=e=>{const b=e.target.closest('[data-rm]');if(!b)return;acts.splice(+b.dataset.rm,1);drawActs()};
     sh.querySelector('#te-mem').onclick=async e=>{const b=e.target.closest('[data-kick]');if(!b)return;await del('people',b.dataset.kick);drawMem();toast('เอาออกจากกลุ่มแล้ว')};
     const addAct=()=>{const i=sh.querySelector('#te-act');const v=i.value.trim();if(v&&!acts.includes(v)){acts.push(v);drawActs()}i.value='';i.focus()};
@@ -542,14 +605,16 @@ function sheetTripEdit(){
     sh.querySelector('#te-act').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();addAct()}};
     sh.querySelector('#te-inv').onclick=sheetInvite;
     sh.querySelector('#nf-go').onclick=async()=>{
-      const p=readPerson(sh,'nf');if(!p)return;
+      const p=readPerson(sh,'nf',false);if(!p)return;
       await put('people',{id:uid(),...p,claimed:false,joinedAt:nowISO()});drawMem();
-      ['name','pp','acct'].forEach(k=>sh.querySelector('#nf-'+k).value='');toast('เพิ่ม '+p.name+' แล้ว');
+      ['name','pp','bank','acct'].forEach(k=>sh.querySelector('#nf-'+k).value='');toast('เพิ่ม '+p.name+' แล้ว');
     };
     sh.querySelector('#te-save').onclick=async()=>{
       const name=sh.querySelector('#te-name').value.trim();if(!name){toast('ใส่ชื่อก่อน');return}
+      let dt=readDates(sh,'te');if(!dt)return;
+      if(!dt.start&&!t.start)dt={start:'',end:'',dates:t.dates||''};   // keep an old free-text date untouched
       if(!acts.length)acts=['ทั่วไป'];
-      closeSheet();if(await put('trips',{id:t.id,name,kind:sh.querySelector('#te-kind').value,dates:sh.querySelector('#te-dates').value.trim(),activities:acts}))toast('บันทึกแล้ว');
+      closeSheet();if(await put('trips',{id:t.id,name,kind:sh.querySelector('#te-kind').value,...dt,activities:acts}))toast('บันทึกแล้ว');
     };
     twoTap(sh.querySelector('#te-leave'),'แตะอีกครั้ง (ชื่อและรายการของคุณยังอยู่ในกลุ่ม)',async()=>{const id=G.id;closeSheet();try{await api(`/groups/${id}/leave`,{method:'POST'});leaveLocal(id);toast('ออกจากกลุ่มแล้ว')}catch(err){toast('ทำรายการไม่สำเร็จ ลองใหม่')}});
     const d=sh.querySelector('#te-del');
@@ -581,7 +646,7 @@ function sheetMembers(){
 function sheetPerson(id){
   const isMe=!id||id===me, p=isMe?profile:D.people[id];
   openSheet(isMe?'บัญชีของคุณ':'ข้อมูลของ '+p.name,`${isMe?`<div class="kv"><span class="av lg me">${esc(profile.name[0])}</span><div class="grow"><div class="label">ชื่อผู้ใช้</div><b>@${esc(user.username)}</b></div></div>`:''}
-   ${personFields(p)}
+   ${personFields(p,'pf',isMe)}
    ${isMe?'<p class="muted" style="margin:0">ใช้กับบัญชีของคุณทุกเครื่อง และอัปเดตให้กลุ่มที่กำลังดูอยู่</p>':''}
    <button class="btn block" id="pf-save">บันทึก</button>
    ${isMe?`<hr class="sep"><details class="box" style="padding:12px 14px"><summary style="cursor:pointer;font-weight:600">เปลี่ยนรหัสผ่าน</summary><form id="pw-form" style="display:grid;gap:10px;margin-top:12px" novalidate>
@@ -598,7 +663,7 @@ function sheetPerson(id){
       try{await api('/auth/password',{method:'POST',body:JSON.stringify({current:c,next:n})});closeSheet();toast('เปลี่ยนรหัสผ่านแล้ว')}
       catch(err){toast(err.code==='wrong_password'?'รหัสผ่านปัจจุบันไม่ถูกต้อง':AUTH_ERR[err.code]||'เปลี่ยนไม่สำเร็จ')}};
     sh.querySelector('#pf-save').onclick=async()=>{
-      const v=readPerson(sh);if(!v)return;
+      const v=readPerson(sh,'pf',isMe);if(!v)return;
       if(isMe){try{const r=await api('/me',{method:'PUT',body:JSON.stringify({profile:v})});setUser(r.user)}catch(err){toast(AUTH_ERR[err.code]||'บันทึกไม่สำเร็จ');return}
         if(G&&G.members[me])await put('people',{...G.members[me],...v,id:me});render()}
       else await put('people',{...D.people[id],...v,id});
@@ -718,6 +783,34 @@ function saveQR(qrCanvas,rcv,a){
   },'image/png');
 }
 
+function sheetLedger(other){
+  const t=trip(),{rows,net}=ledger(t,other),o=P(other);
+  const s=settle(t).find(x=>(x.from===other&&x.to===me)||(x.from===me&&x.to===other));
+  const head=net>0.009?`${esc(o.name)} ค้างคุณ`:net<-0.009?`คุณค้าง ${esc(o.name)}`:`คุณกับ ${esc(o.name)} เคลียร์กันแล้ว`;
+  const runLbl=v=>v>0.009?o.name+'ค้าง '+baht(v,2):v<-0.009?'คุณค้าง '+baht(-v,2):'เคลียร์แล้ว';
+  const line=r=>{
+    const v=r.v,cls=v>0?'pos-t':'neg-t',sign=v>0?'+':'−';
+    if(r.kind==='pay'){const p=r.p,fromMe=p.from===me;
+      return `<div class="row"><span class="cat">${ic('check',17)}</span><div class="grow"><div class="t">${fromMe?'คุณโอนให้ '+esc(o.name):esc(o.name)+' โอนให้คุณ'}</div>
+        <div class="muted num">${fmtD(p.createdAt)}${p.confirmed?'':' · รอยืนยัน'}</div></div>
+        <div class="amt num ${cls}">${sign}${baht(Math.abs(v),2)}<div class="muted" style="font-weight:400">${runLbl(r.run)}</div></div></div>`}
+    const e=r.e,iPaid=e.payer===me;
+    return `<button class="row" data-ledexp="${e.id}"><span class="cat">${ic(e.cat||'other',18)}</span><div class="grow"><div class="t">${esc(e.title)}</div>
+      <div class="muted num">${fmtD(e.date)} · ${iPaid?`คุณจ่าย ${baht(e.amount)} · ส่วน${esc(o.name)}`:`${esc(o.name)} จ่าย ${baht(e.amount)} · ส่วนคุณ`} ${baht(Math.abs(v),2)}</div></div>
+      <div class="amt num ${cls}">${sign}${baht(Math.abs(v),2)}<div class="muted" style="font-weight:400">${runLbl(r.run)}</div></div></button>`;
+  };
+  openSheet('ระหว่างคุณกับ '+o.name,`
+   <div class="kv">${av(other,'lg')}<div class="grow"><div class="label">${head}</div><b class="num ${net>0.009?'pos-t':net<-0.009?'neg-t':''}" style="font-size:24px">${baht(Math.abs(net),2)}</b></div></div>
+   <p class="muted" style="margin:0">+ คือ ${esc(o.name)} ติดคุณ · − คือคุณติด ${esc(o.name)} (หักลบกันแล้ว)</p>
+   <div class="box list">${rows.slice().reverse().map(line).join('')||'<div class="empty">ยังไม่มีรายการระหว่างกัน</div>'}</div>
+   ${s&&s.from===me?`<button class="btn block" id="lg-pay">จ่าย ${esc(o.name)} ${baht(s.amount,2)}</button>`:''}
+   ${s&&s.to===me?`<button class="btn line block" id="lg-remind">${ic('bell',16)} ทวง ${esc(o.name)}</button>`:''}`,sh=>{
+    sh.querySelector('.list').onclick=e=>{const b=e.target.closest('[data-ledexp]');if(b){closeSheet();sheetExpense(b.dataset.ledexp)}};
+    const pb=sh.querySelector('#lg-pay');if(pb)pb.onclick=()=>{closeSheet();sheetPay(me,other)};
+    const rb=sh.querySelector('#lg-remind');if(rb)rb.onclick=()=>{closeSheet();sheetRemind(other)};
+  });
+}
+
 function sheetRemind(debtor){
   const t=trip(),s=settle(t).find(x=>x.from===debtor&&x.to===me);if(!s)return;
   const mp=P(me),d=P(debtor);
@@ -737,6 +830,7 @@ function sheetRemind(debtor){
 }
 
 /* ================= events ================= */
+document.addEventListener('click',e=>{const r=e.target.closest('[data-ledgerrow]');if(r&&!r.closest('.sheet'))sheetLedger(r.dataset.ledgerrow)});
 document.addEventListener('click',async e=>{
   const b=e.target.closest('button');if(!b||b.closest('.sheet')&&!b.matches('[data-copy]'))return;
   const ds=b.dataset;
@@ -751,6 +845,7 @@ document.addEventListener('click',async e=>{
   if(ds.exp)return sheetExpense(ds.exp);
   if(ds.pay){const[f,t]=ds.pay.split('|');return sheetPay(f,t)}
   if(ds.remind)return sheetRemind(ds.remind);
+  if(ds.ledger)return sheetLedger(ds.ledger);
   if(ds.confirm){const p=D.payments[ds.confirm];if(p&&await put('payments',{...p,confirmed:true}))toast('ยืนยันว่าได้รับเงินแล้ว');return}
   if(ds.reject){if(await del('payments',ds.reject))toast('ยกเลิกรายการโอนนี้แล้ว');return}
   if(ds.unpay){if(b.dataset.armed){if(await del('payments',ds.unpay))toast('ลบรายการจ่ายแล้ว');return}b.dataset.armed=1;b.style.background='var(--error)';b.style.color='#fff';toast('แตะ × อีกครั้งเพื่อลบรายการจ่ายนี้');setTimeout(()=>{if(b.isConnected){delete b.dataset.armed;b.style.background='';b.style.color=''}},3000);return}

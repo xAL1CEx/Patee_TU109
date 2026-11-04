@@ -56,12 +56,21 @@ export function checkPassword(v) {
 }
 
 const str = (v, max) => String(v ?? "").trim().slice(0, max);
+// An account receives money by exactly one method: PromptPay ("pp") or a bank account ("bank").
 export function cleanProfile(p = {}) {
-  const pp = String(p.pp || "").replace(/\D/g, "");
-  if (pp && ![10, 13, 15].includes(pp.length)) throw new HttpError(400, "bad_promptpay");
-  const out = { name: str(p.name, 30), pp, bank: str(p.bank, 40), acct: str(p.acct, 30) };
-  if (!out.name) throw new HttpError(400, "bad_name");
-  return out;
+  const name = str(p.name, 30);
+  if (!name) throw new HttpError(400, "bad_name");
+  const pay = p.pay === "bank" ? "bank" : p.pay === "pp" ? "pp" : (String(p.pp || "") ? "pp" : "bank");
+  if (pay === "pp") {
+    const pp = String(p.pp || "").replace(/\D/g, "");
+    if (![10, 13, 15].includes(pp.length)) throw new HttpError(400, "bad_promptpay");
+    return { name, pay, pp, bank: "", acct: "" };
+  }
+  const bank = str(p.bank, 40), acct = str(p.acct, 30);
+  if (!bank) throw new HttpError(400, "bad_bank");
+  const digits = acct.replace(/\D/g, "").length;
+  if (digits < 10 || digits > 15 || /[^\d\s-]/.test(acct)) throw new HttpError(400, "bad_acct");
+  return { name, pay, pp: "", bank, acct };
 }
 
 export function readCookie(req, name) {

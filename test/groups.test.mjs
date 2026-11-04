@@ -29,6 +29,18 @@ await test("sign up needs a nickname and a valid username/password", async () =>
   assert.equal((await ton("POST", "/api/auth/register", { username: "ton", password: "short", profile: tonProfile })).body.error, "bad_password");
 });
 
+await test("sign up must pick PromptPay or a bank account, and fill it in", async () => {
+  const reg = profile => ton("POST", "/api/auth/register", { username: "payer", password: "secret123", profile });
+  assert.equal((await reg({ name: "x" })).body.error, "bad_bank");
+  assert.equal((await reg({ name: "x", pay: "pp", pp: "" })).body.error, "bad_promptpay");
+  assert.equal((await reg({ name: "x", pay: "pp", pp: "12345" })).body.error, "bad_promptpay");
+  assert.equal((await reg({ name: "x", pay: "bank", bank: "", acct: "1234567890" })).body.error, "bad_bank");
+  assert.equal((await reg({ name: "x", pay: "bank", bank: "กสิกรไทย", acct: "12345" })).body.error, "bad_acct");
+  const ok = await phone()("POST", "/api/auth/register", { username: "payer", password: "secret123", profile: { name: "x", pay: "bank", bank: "กสิกรไทย", acct: "123-4-56789-0", pp: "0812345678" } });
+  assert.equal(ok.status, 201);
+  assert.deepEqual([ok.body.user.profile.pay, ok.body.user.profile.pp, ok.body.user.profile.acct], ["bank", "", "123-4-56789-0"], "only the chosen method is kept");
+});
+
 await test("sign up sets an HttpOnly session cookie", async () => {
   const r = await ton("POST", "/api/auth/register", { username: "Ton", password: "secret123", profile: tonProfile });
   assert.equal(r.status, 201);
@@ -40,12 +52,12 @@ await test("sign up sets an HttpOnly session cookie", async () => {
 
 await test("usernames are unique (case-insensitive), even when racing", async () => {
   const a = phone(), b = phone();
-  const r = await stranger("POST", "/api/auth/register", { username: "TON", password: "other1234", profile: { name: "อีกคน" } });
+  const r = await stranger("POST", "/api/auth/register", { username: "TON", password: "other1234", profile: { name: "อีกคน", pp: "0811111111" } });
   assert.equal(r.status, 409);
   assert.equal(r.body.error, "username_taken");
   const [x, y] = await Promise.all([
-    a("POST", "/api/auth/register", { username: "same", password: "password1", profile: { name: "A" } }),
-    b("POST", "/api/auth/register", { username: "same", password: "password2", profile: { name: "B" } }),
+    a("POST", "/api/auth/register", { username: "same", password: "password1", profile: { name: "A", pp: "0811111112" } }),
+    b("POST", "/api/auth/register", { username: "same", password: "password2", profile: { name: "B", pay: "bank", bank: "กสิกรไทย", acct: "123-4-56789-0" } }),
   ]);
   assert.deepEqual([x.status, y.status].sort(), [201, 409]);
 });
@@ -65,6 +77,18 @@ await test("host creates a group and gets an invite", async () => {
   assert.equal(r.body.group.members[r.body.group.me].uid, undefined, "account ids are not exposed");
   const me = await ton("GET", "/api/me");
   assert.deepEqual(me.body.groups.map(g => g.id), [gid]);
+});
+
+await test("group dates: end may not be before start", async () => {
+  const mk = meta => ton("POST", "/api/groups", { meta: { name: "d", ...meta } });
+  assert.equal((await mk({ start: "2026-12-03", end: "2026-12-01" })).body.error, "bad_dates");
+  assert.equal((await mk({ start: "", end: "2026-12-01" })).body.error, "bad_dates");
+  assert.equal((await mk({ start: "3 Dec" })).body.error, "bad_dates");
+  const r = await mk({ start: "2026-12-01", end: "2026-12-03", dates: "1–3 ธ.ค." });
+  assert.equal(r.status, 201);
+  assert.deepEqual([r.body.group.start, r.body.group.end], ["2026-12-01", "2026-12-03"]);
+  assert.equal((await ton("POST", `/api/groups/${r.body.group.id}/ops`, { ops: [{ op: "meta", doc: { start: "2026-12-05", end: "2026-12-04" } }] })).status, 400);
+  await ton("DELETE", `/api/groups/${r.body.group.id}`);
 });
 
 let offlineId;
@@ -89,7 +113,7 @@ await test("friend previews and claims the entry the host made", async () => {
   assert.equal(j.body.group.me, offlineId);
   assert.equal(j.body.group.members[offlineId].name, "แพร");
   assert.equal(j.body.group.members[offlineId].claimed, true);
-  const again = await stranger("POST", "/api/auth/register", { username: "third", password: "thirdpass", profile: { name: "สาม" } });
+  const again = await stranger("POST", "/api/auth/register", { username: "third", password: "thirdpass", profile: { name: "สาม", pp: "0811111113" } });
   assert.equal(again.status, 201);
   assert.equal((await stranger("POST", `/api/groups/${gid}/join?t=${invite}`, { claim: offlineId })).body.error, "already_claimed");
 });
