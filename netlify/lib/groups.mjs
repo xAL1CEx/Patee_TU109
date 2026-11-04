@@ -85,9 +85,91 @@ export function joinGroup(g, uid, profile, claimId) {
   return mid;
 }
 
+const r2 = n => Math.round(n * 100) / 100;
+
+// Who may change an expense: the member who recorded it (older entries without "by": the payer).
+const expenseOwner = e => e.by || e.payer;
+
+// An expense is recorded by the person who paid. The one exception is a friend who has no account
+// (nobody could record it for them otherwise); then the member who records it owns the entry.
+function cleanExpense(g, doc, cur, mine) {
+  if (!doc || typeof doc !== "object") throw new HttpError(400, "bad_doc");
+  const payer = g.members?.[doc.payer];
+  if (!payer) throw new HttpError(400, "bad_payer");
+  if (doc.payer !== mine && payer.uid) throw new HttpError(403, "payer_must_record");
+  const amount = r2(Number(doc.amount));
+  if (!(amount > 0) || amount > 10_000_000) throw new HttpError(400, "bad_amount");
+  const split = {};
+  for (const [k, v] of Object.entries(doc.split || {})) {
+    const n = r2(Number(v));
+    if (!g.members[k] || !(n >= 0)) throw new HttpError(400, "bad_split");
+    if (n > 0) split[k] = n;
+  }
+  const sum = Object.values(split).reduce((a, v) => a + v, 0);
+  if (!Object.keys(split).length || Math.abs(sum - amount) > 0.011) throw new HttpError(400, "bad_split");
+  return { ...doc, amount, split, by: cur ? expenseOwner(cur) : mine };
+}
+
+// What each person owes each other person (same rule as the app). A transfer only counts
+// once the receiver has confirmed it.
+function pairDebts(g) {
+  const owe = {};
+  const add = (a, b, v) => { if (a !== b && v) owe[a + "|" + b] = (owe[a + "|" + b] || 0) + v; };
+  for (const e of Object.values(g.expenses || {})) for (const k in e.split || {}) add(k, e.payer, Number(e.split[k]) || 0);
+  for (const p of Object.values(g.payments || {})) if (p.confirmed) add(p.from, p.to, -(Number(p.amount) || 0));
+  return (a, b) => (owe[a + "|" + b] || 0) - (owe[b + "|" + a] || 0);   // > 0: a owes b
+}
+
+// How much a member still owes, in total.
+export function amountOwed(g, mid) {
+  const net = pairDebts(g);
+  let total = 0;
+  for (const other of Object.keys(g.members || {})) if (other !== mid && net(mid, other) > 0.009) total += net(mid, other);
+  return r2(total);
+}
+
+// Does anyone in the group still owe anyone?
+export function hasOpenDebts(g) {
+  const net = pairDebts(g), ids = Object.keys(g.members || {});
+  return ids.some(a => ids.some(b => a !== b && net(a, b) > 0.009));
+}
+
+// A transfer is reported by the person who sent it (it then waits for the receiver to confirm),
+// or recorded by the receiver (confirmed right away). Money sent to a friend without an account
+// counts at once, since nobody could confirm it.
+function cleanPayment(g, doc, mine) {
+  if (!doc || typeof doc !== "object") throw new HttpError(400, "bad_doc");
+  if (!g.members?.[doc.from] || !g.members?.[doc.to] || doc.from === doc.to) throw new HttpError(400, "bad_payment");
+  if (mine !== doc.from && mine !== doc.to) throw new HttpError(403, "not_your_payment");
+  const amount = r2(Number(doc.amount));
+  if (!(amount > 0) || amount > 10_000_000) throw new HttpError(400, "bad_amount");
+  return { ...doc, amount, by: mine, confirmed: mine === doc.to || !g.members[doc.to].uid };
+}
+
+// Who may change something that sits between two people (a transfer, a plan, a reminder).
+function checkPairDoc(col, op, cur, doc, mine) {
+  if (col === "payments") {
+    if (op === "put") {
+      if (!cur) return;
+      if (mine !== cur.to || doc?.confirmed !== true) throw new HttpError(403, "payment_locked");   // only the receiver, only to confirm
+    } else if (mine !== cur.to && !((mine === cur.from || mine === cur.by) && !cur.confirmed)) {
+      throw new HttpError(403, "payment_locked");   // receiver can reject/undo; sender can withdraw until it's confirmed
+    }
+  }
+  if (col === "plans") {
+    const d = cur || doc || {};
+    if (mine !== d.from && mine !== d.to) throw new HttpError(403, "not_your_plan");
+  }
+  if (col === "reminders") {
+    if (op === "put" && !cur && doc?.from !== mine) throw new HttpError(403, "not_your_reminder");
+    if (cur && mine !== cur.from && mine !== cur.to) throw new HttpError(403, "not_your_reminder");
+  }
+}
+
 // uid = the account making the change. Account-linked members can only be edited or removed by that account.
 export function applyOps(g, ops, uid) {
   if (!Array.isArray(ops) || !ops.length || ops.length > 100) throw new HttpError(400, "bad_ops");
+  const mine = memberOf(g, uid)?.id;
   for (const op of ops) {
     if (op.op === "meta") { Object.assign(g, cleanMeta(op.doc)); continue; }
     if (!COLS.includes(op.col)) throw new HttpError(400, "bad_collection");
@@ -95,12 +177,16 @@ export function applyOps(g, ops, uid) {
     g[op.col] = g[op.col] || {};
     const cur = g[op.col][op.id];
     if (op.col === "members" && cur?.uid && cur.uid !== uid) throw new HttpError(403, "not_your_member");
+    if (op.col === "expenses" && cur && expenseOwner(cur) !== mine) throw new HttpError(403, "not_your_expense");
+    checkPairDoc(op.col, op.op, cur, op.doc, mine);
     if (op.op === "put") {
       let doc = op.doc;
       if (op.col === "members") {
         const { uid: _u, claimed: _c, ...rest } = doc || {};
         doc = { ...rest, ...(cur?.uid ? { uid: cur.uid } : {}), claimed: !!cur?.uid, joinedAt: cur?.joinedAt || rest.joinedAt || new Date().toISOString() };
       }
+      if (op.col === "expenses") doc = cleanExpense(g, doc, cur, mine);
+      if (op.col === "payments") doc = cur ? { ...cur, confirmed: true, confirmedAt: new Date().toISOString() } : cleanPayment(g, doc, mine);
       g[op.col][op.id] = cleanDoc(doc, op.id);
     } else if (op.op === "del") {
       if (op.col === "members" && cur?.uid) throw new HttpError(403, "cannot_remove_account");

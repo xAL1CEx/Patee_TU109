@@ -13,6 +13,8 @@ const I={
   wallet:'<path d="M4 7h14a2 2 0 0 1 2 2v9H4zM4 7l11-3v3"/><circle cx="16" cy="13" r="1"/>',
   qr:'<path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2"/>',
   scan:'<path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M4 12h16"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  lock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   bell:'<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0"/>',
   people:'<circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14c3 0 5 2 5 5"/>',
   receipt:'<path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6"/>',
@@ -142,7 +144,7 @@ function send(ops){
     if(G&&G.id===gid)adopt(r.group);
     return true;
   }).catch(err=>{
-    if(err.status!==401)toast(err.code==='offline'?'ไม่มีอินเทอร์เน็ต บันทึกไม่สำเร็จ':err.code==='group_full'?'กลุ่มนี้ข้อมูลเต็มแล้ว':err.code==='not_your_member'?'แก้ข้อมูลของเพื่อนที่มีบัญชีไม่ได้':err.code==='cannot_remove_account'?'เอาเพื่อนที่มีบัญชีออกไม่ได้':'บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง');
+    if(err.status!==401)toast(err.code==='offline'?'ไม่มีอินเทอร์เน็ต บันทึกไม่สำเร็จ':err.code==='group_full'?'กลุ่มนี้ข้อมูลเต็มแล้ว':err.code==='not_your_member'?'แก้ข้อมูลของเพื่อนที่มีบัญชีไม่ได้':err.code==='cannot_remove_account'?'เอาเพื่อนที่มีบัญชีออกไม่ได้':err.code==='not_your_expense'?'แก้ได้เฉพาะคนที่บันทึกรายการนี้':err.code==='payer_must_record'?'คนที่จ่ายต้องเป็นคนบันทึกเอง':err.code==='bad_split'||err.code==='bad_amount'?'ยอดเงินหรือการแบ่งไม่ถูกต้อง':err.code==='payment_locked'?'รายการโอนนี้แก้ไม่ได้แล้ว':err.code==='not_your_payment'?'บันทึกได้เฉพาะการโอนของคุณเอง':'บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง');
     load(gid,true);return false;
   }).finally(()=>busy--);
   chain=p;return p;
@@ -161,11 +163,14 @@ const av=(id,cls='')=>`<span class="av ${id===me?'me':''} ${cls}">${esc((P(id).n
 const nm=id=>id===me?'คุณ':P(id).name;
 const trip=()=>G?D.trips[G.id]:null;
 const texp=t=>Object.values(D.expenses).filter(e=>e.trip===t.id).sort((a,b)=>((a.date||'')+(a.createdAt||'')).localeCompare((b.date||'')+(b.createdAt||'')));
+// transfers count toward debts only after the receiver confirms them
+const tpaid=t=>tpay(t).filter(p=>p.confirmed);
+const pendingTo=(t,from,to)=>r2(tpay(t).filter(p=>!p.confirmed&&p.from===from&&p.to===to).reduce((a,p)=>a+p.amount,0));
 const tpay=t=>Object.values(D.payments).filter(p=>p.trip===t.id).sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
 function balances(t){
   const net={};(t.members||[]).forEach(m=>net[m]=0);
   texp(t).forEach(e=>{net[e.payer]=(net[e.payer]||0)+e.amount;for(const k in e.split)net[k]=(net[k]||0)-e.split[k]});
-  tpay(t).forEach(p=>{net[p.from]=(net[p.from]||0)+p.amount;net[p.to]=(net[p.to]||0)-p.amount});
+  tpaid(t).forEach(p=>{net[p.from]=(net[p.from]||0)+p.amount;net[p.to]=(net[p.to]||0)-p.amount});
   for(const k in net)net[k]=r2(net[k]);
   return net;
 }
@@ -174,7 +179,7 @@ function balances(t){
 function settle(t){
   const owe={};const add=(a,b,v)=>{if(a===b||!v)return;owe[a+'|'+b]=(owe[a+'|'+b]||0)+v};
   texp(t).forEach(e=>{for(const k in e.split)add(k,e.payer,e.split[k])});
-  tpay(t).forEach(p=>add(p.from,p.to,-p.amount));
+  tpaid(t).forEach(p=>add(p.from,p.to,-p.amount));
   const out=[],seen=new Set();
   for(const key in owe){const[a,b]=key.split('|'),pk=[a,b].sort().join('|');if(seen.has(pk))continue;seen.add(pk);
     const v=r2((owe[a+'|'+b]||0)-(owe[b+'|'+a]||0));
@@ -189,19 +194,25 @@ function ledger(t,other){
     else if(e.payer===other&&e.split?.[me])rows.push({kind:'exp',e,v:-e.split[me],date:e.date||e.createdAt});
   });
   tpay(t).forEach(p=>{
-    if(p.from===other&&p.to===me)rows.push({kind:'pay',p,v:-p.amount,date:p.createdAt});
-    else if(p.from===me&&p.to===other)rows.push({kind:'pay',p,v:p.amount,date:p.createdAt});
+    const k=p.confirmed?1:0;   // a transfer waiting for confirmation is listed but doesn't count yet
+    if(p.from===other&&p.to===me)rows.push({kind:'pay',p,v:-p.amount*k,date:p.createdAt});
+    else if(p.from===me&&p.to===other)rows.push({kind:'pay',p,v:p.amount*k,date:p.createdAt});
   });
   rows.sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
   let run=0;rows.forEach(r=>{run=r2(run+r.v);r.run=run});
   return {rows,net:run};
 }
 function planInfo(pl){
-  const pays=Object.values(D.payments).filter(p=>p.plan===pl.id);
+  const pays=Object.values(D.payments).filter(p=>p.plan===pl.id&&p.confirmed);
   const paid=r2(pays.reduce((a,p)=>a+p.amount,0)),count=pays.length,inst=r2(pl.total/pl.months),remaining=r2(pl.total-paid);
   return {paid,count,inst,remaining,done:remaining<0.01,due:addMonths(pl.startedAt,count),overdue:new Date(addMonths(pl.startedAt,count))<new Date()};
 }
 const activePlan=(t,from,to)=>Object.values(D.plans).find(p=>p.trip===t.id&&p.from===from&&p.to===to&&!planInfo(p).done);
+const expOwner=e=>e.by||e.payer;
+const canEditExp=e=>expOwner(e)===me;
+// people I'm allowed to record as the payer: myself, or a friend who has no account
+const payerChoices=t=>t.members.filter(m=>m===me||!P(m).claimed);
+const myDebt=t=>r2(settle(t).filter(s=>s.from===me).reduce((a,s)=>a+s.amount,0));
 const involved=(t,m)=>texp(t).some(e=>e.payer===m||e.split?.[m])||tpay(t).some(p=>p.from===m||p.to===m);
 
 /* ================= PromptPay QR payload (EMVCo) ================= */
@@ -372,7 +383,7 @@ function expRow(e){
   const mine=e.split?.[me]||0;
   return `<button class="row" data-exp="${e.id}"><span class="cat">${ic(e.cat||'other',18)}</span>
    <div class="grow"><div class="t">${esc(e.title)}</div><div class="muted">${fmtD(e.date)} · ${e.payer===me?'คุณจ่าย':esc(P(e.payer).name)+' จ่าย'}<span class="tag">${esc(e.act||'')}</span></div></div>
-   <div class="amt num">${baht(e.amount)}<div class="muted" style="font-weight:400">${mine?'ส่วนคุณ '+baht(mine):'ไม่เกี่ยวกับคุณ'}</div></div></button>`;
+   <div class="amt num">${baht(e.amount)}<div class="muted" style="font-weight:400">${mine?'ส่วนคุณ '+baht(mine):'ไม่เกี่ยวกับคุณ'}${canEditExp(e)?'':' '+ic('lock',11)}</div></div></button>`;
 }
 
 function alerts(t){
@@ -382,7 +393,7 @@ function alerts(t){
   st.filter(s=>s.from===me).forEach(s=>{
     const pl=activePlan(t,me,s.to),rem=Object.values(D.reminders).filter(r=>r.trip===t.id&&r.from===s.to&&r.to===me).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
     const sub=pl?(()=>{const i=planInfo(pl);return `ผ่อนงวดที่ ${i.count+1}/${pl.months} · ${baht(Math.min(i.inst,s.amount),2)} ${i.overdue?'<span class="neg-t">เลยกำหนดแล้ว</span>':'ครบกำหนด '+fmtD(i.due)}`})()
-      :`ค้างอยู่ ${baht(s.amount,2)}${rem?` · ${esc(P(s.to).name)} ทวงเมื่อ ${fmtD(rem.createdAt)}`:''}`;
+      :`ค้างอยู่ ${baht(s.amount,2)}${pendingTo(t,me,s.to)?` · แจ้งโอนแล้ว ${baht(pendingTo(t,me,s.to),2)} รอยืนยัน`:rem?` · ${esc(P(s.to).name)} ทวงเมื่อ ${fmtD(rem.createdAt)}`:''}`;
     out.push(`<div class="alert">${ic('bell',20)}<div class="grow"><b>คุณยังไม่ได้จ่าย${esc(P(s.to).name)}</b><div class="muted num">${sub}</div></div><button class="btn sm" data-pay="${s.from}|${s.to}">จ่าย</button></div>`);
   });
   const owed=st.filter(s=>s.to===me);
@@ -479,7 +490,7 @@ function vSettle(t){
   <section><div class="sec-h"><h2>ประวัติการจ่าย</h2></div><div class="box list">${tpay(t).reverse().map(p=>`<div class="row"><span class="cat">${ic('check',17)}</span>
     <div class="grow"><div class="t">${esc(nm(p.from))} จ่าย ${esc(nm(p.to))}</div><div class="muted">${fmtD(p.createdAt)}${p.plan?' · ผ่อน':''}</div></div>
     <b class="num">${baht(p.amount,2)}</b><span class="state ${p.confirmed?'pos':'warn'}">${p.confirmed?'ยืนยันแล้ว':'รอยืนยัน'}</span>
-    ${(p.from===me||p.to===me)?`<button class="x" data-unpay="${p.id}" aria-label="ลบรายการจ่ายนี้">${ic('x',14)}</button>`:''}</div>`).join('')||'<div class="empty">ยังไม่มีการจ่าย</div>'}</div></section>`;
+    ${(p.to===me||(p.from===me&&!p.confirmed))?`<button class="x" data-unpay="${p.id}" aria-label="ลบรายการจ่ายนี้">${ic('x',14)}</button>`:''}</div>`).join('')||'<div class="empty">ยังไม่มีการจ่าย</div>'}</div></section>`;
 }
 
 /* ================= sheets ================= */
@@ -592,8 +603,9 @@ function sheetTripEdit(){
    <div class="box list" id="te-mem"></div>
    <details class="box" style="padding:12px 14px"><summary style="cursor:pointer;font-weight:600">+ เพิ่มเพื่อนที่ไม่ได้ใช้แอป</summary><div style="display:grid;gap:10px;margin-top:12px"><p class="muted" style="margin:0">ถ้าเพื่อนคนนี้มาใช้แอปทีหลัง ตอนสแกนเข้ากลุ่มให้แตะ "ฉันคือ…" เพื่อรับชื่อนี้ไป</p>${personFields({},'nf',false)}<button class="btn line" id="nf-go">เพิ่มเพื่อนคนนี้</button></div></details>
    <hr class="sep">
-   <button class="btn line block" id="te-leave">ออกจากกลุ่มนี้</button>
-   ${isOwner?'<button class="btn danger block" id="te-del">ลบกลุ่มนี้ทั้งหมด</button>':''}`,sh=>{
+   ${myDebt(t)>0?`<div class="alert plain">${ic('lock',18)}<div class="grow"><b>ยังออกจากกลุ่มไม่ได้</b><div class="muted num">คุณยังค้างเพื่อนอยู่ ${baht(myDebt(t),2)} จ่ายให้ครบก่อนถึงจะออกได้</div></div><button class="btn sm" data-goSettle>จ่าย</button></div>`
+     :'<button class="btn line block" id="te-leave">ออกจากกลุ่มนี้</button>'}
+   ${isOwner?(settle(t).length?`<div class="alert plain">${ic('lock',18)}<div class="grow"><b>ยังลบกลุ่มไม่ได้</b><div class="muted">ยังมีคนค้างเงินกันอยู่ ${settle(t).length} รายการ ลบได้เมื่อทุกคนเคลียร์ครบ</div></div></div>`:'<button class="btn danger block" id="te-del">ลบกลุ่มนี้ทั้งหมด</button>'):''}`,sh=>{
     const drawActs=()=>sh.querySelector('#te-acts').innerHTML=acts.map((a,i)=>`<span>${esc(a)}<button data-rm="${i}" aria-label="ลบ ${esc(a)}">${ic('x',12)}</button></span>`).join('')||'<span class="muted">ยังไม่มี</span>';
     const drawMem=()=>sh.querySelector('#te-mem').innerHTML=trip().members.map(m=>`<div class="row">${av(m,'lg')}<div class="grow"><div class="t">${esc(P(m).name)}${m===me?' (คุณ)':''}</div><div class="muted">${m===G.owner?'คนสร้างกลุ่ม':P(m).claimed?'ใช้แอปอยู่':'ยังไม่ได้ใช้แอป'}</div></div>
       ${m!==me&&!P(m).claimed&&!involved(t,m)?`<button class="x" data-kick="${m}" aria-label="เอา ${esc(P(m).name)} ออก">${ic('x',14)}</button>`:''}</div>`).join('');
@@ -616,11 +628,12 @@ function sheetTripEdit(){
       if(!acts.length)acts=['ทั่วไป'];
       closeSheet();if(await put('trips',{id:t.id,name,kind:sh.querySelector('#te-kind').value,...dt,activities:acts}))toast('บันทึกแล้ว');
     };
-    twoTap(sh.querySelector('#te-leave'),'แตะอีกครั้ง (ชื่อและรายการของคุณยังอยู่ในกลุ่ม)',async()=>{const id=G.id;closeSheet();try{await api(`/groups/${id}/leave`,{method:'POST'});leaveLocal(id);toast('ออกจากกลุ่มแล้ว')}catch(err){toast('ทำรายการไม่สำเร็จ ลองใหม่')}});
+    const gs=sh.querySelector('[data-goSettle]');if(gs)gs.onclick=()=>{closeSheet();tab='settle';render();window.scrollTo(0,0)};
+    const lv=sh.querySelector('#te-leave');if(lv)twoTap(lv,'แตะอีกครั้ง (ชื่อและรายการของคุณยังอยู่ในกลุ่ม)',async()=>{const id=G.id;closeSheet();try{await api(`/groups/${id}/leave`,{method:'POST'});leaveLocal(id);toast('ออกจากกลุ่มแล้ว')}catch(err){toast(err.code==='still_owe'?'ยังค้างเพื่อนอยู่ จ่ายให้ครบก่อนถึงจะออกได้':'ทำรายการไม่สำเร็จ ลองใหม่')}});
     const d=sh.querySelector('#te-del');
     if(d)twoTap(d,'แตะอีกครั้งเพื่อลบกลุ่มของทุกคน',async()=>{
       const id=G.id;closeSheet();
-      try{await api(`/groups/${id}`,{method:'DELETE'});leaveLocal(id);toast('ลบกลุ่มแล้ว')}catch(err){toast('ลบไม่สำเร็จ ลองใหม่')}
+      try{await api(`/groups/${id}`,{method:'DELETE'});leaveLocal(id);toast('ลบกลุ่มแล้ว')}catch(err){toast(err.code==='has_debts'?'ยังมีคนค้างเงินกันอยู่ ลบกลุ่มไม่ได้':'ลบไม่สำเร็จ ลองใหม่')}
     });
   });
 }
@@ -672,8 +685,18 @@ function sheetPerson(id){
   });
 }
 
+function sheetExpenseView(e){
+  const t=trip();
+  openSheet('รายละเอียดรายการ',`
+   <div><div class="label">${esc(e.title)}</div><div class="big num">${baht(e.amount,2)}</div>
+    <div class="muted">${fmtD(e.date)} · ${esc(nm(e.payer))} จ่าย${e.act?' · '+esc(e.act):''}</div></div>
+   <div class="box list">${Object.entries(e.split||{}).map(([m,v])=>`<div class="row">${av(m)}<div class="grow"><div class="t">${esc(nm(m))}</div></div><span class="amt num">${baht(v,2)}</span></div>`).join('')}</div>
+   <div class="alert plain">${ic('lock',18)}<div class="grow">แก้หรือลบได้เฉพาะ <b>${esc(nm(expOwner(e)))}</b> ที่บันทึกรายการนี้ ถ้ารายการผิด ทักบอกให้แก้ได้เลย</div></div>`);
+}
 function sheetExpense(id){
   const t=trip(),old=id?D.expenses[id]:null;
+  if(old&&!canEditExp(old))return sheetExpenseView(old);
+  const payers=payerChoices(t);if(old&&!payers.includes(old.payer))payers.push(old.payer);
   let payer=old?.payer||me,mode2='eq',sel=new Set(old?Object.keys(old.split):t.members);
   if(old){const eq=eqSplit(Object.keys(old.split),old.amount);if(Object.keys(old.split).some(k=>Math.abs(old.split[k]-eq[k])>0.011))mode2='cu'}
   const acts=t.activities?.length?t.activities:['ทั่วไป'];
@@ -684,13 +707,14 @@ function sheetExpense(id){
    <label class="f">หมวด<select class="inp" id="ex-cat">${Object.entries(CATS).map(([k,n])=>`<option value="${k}" ${k===old?.cat?'selected':''}>${n}</option>`).join('')}</select></label></div>
    <label class="f">วันที่<input class="inp" type="date" id="ex-date" value="${old?.date||todayDate()}"></label>
    <div class="label">ใครจ่าย</div><div class="who" id="ex-payer"></div>
+   <p class="note" style="margin:0">บันทึกได้เฉพาะรายการที่คุณจ่ายเอง${payers.length>1?' หรือที่เพื่อนซึ่งยังไม่มีบัญชีจ่าย':''} ถ้าเพื่อนที่มีบัญชีเป็นคนจ่าย ให้เขาบันทึกเอง</p>
    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><span class="label">หารกับใคร</span>
      <div class="seg" id="ex-mode"><button data-m="eq">หารเท่ากัน</button><button data-m="cu">กำหนดเอง</button></div></div>
    <div id="ex-split"></div>
    <button class="btn block" id="ex-save">บันทึก</button>
    ${old?'<button class="btn danger block" id="ex-del">ลบรายการนี้</button>':''}`,sh=>{
     const amtEl=sh.querySelector('#ex-amt');
-    const drawPayer=()=>sh.querySelector('#ex-payer').innerHTML=t.members.map(m=>`<button data-p="${m}" aria-pressed="${m===payer}">${av(m)}${esc(nm(m))}</button>`).join('');
+    const drawPayer=()=>sh.querySelector('#ex-payer').innerHTML=payers.map(m=>`<button data-p="${m}" aria-pressed="${m===payer}">${av(m)}${esc(nm(m))}</button>`).join('');
     const drawSplit=()=>{
       sh.querySelectorAll('#ex-mode [data-m]').forEach(x=>x.setAttribute('aria-pressed',x.dataset.m===mode2));
       const amt=+amtEl.value||0;
@@ -719,7 +743,7 @@ function sheetExpense(id){
       else{sh.querySelectorAll('[data-cu]').forEach(i=>{const v=r2(+i.value||0);if(v>0)split[i.dataset.cu]=v});
         const s=Object.values(split).reduce((a,v)=>a+v,0);if(Math.abs(s-amt)>0.01){toast('ยอดที่แบ่งยังไม่เท่ากับยอดรวม');return}}
       const cat=sh.querySelector('#ex-cat').value;
-      const doc={id:old?.id||uid(),trip:t.id,title:sh.querySelector('#ex-title').value.trim()||CATS[cat],amount:amt,payer,split,cat,act:sh.querySelector('#ex-act').value,date:sh.querySelector('#ex-date').value||todayDate(),createdAt:old?.createdAt||nowISO(),by:me};
+      const doc={id:old?.id||uid(),trip:t.id,title:sh.querySelector('#ex-title').value.trim()||CATS[cat],amount:amt,payer,split,cat,act:sh.querySelector('#ex-act').value,date:sh.querySelector('#ex-date').value||todayDate(),createdAt:old?.createdAt||nowISO(),by:old?expOwner(old):me};
       closeSheet();if(await put('expenses',doc))toast(old?'แก้ไขแล้ว':'บันทึกแล้ว');
     };
     const d=sh.querySelector('#ex-del');if(d)twoTap(d,'แตะอีกครั้งเพื่อยืนยันการลบ',async()=>{closeSheet();if(await del('expenses',old.id))toast('ลบรายการแล้ว')});
@@ -735,6 +759,7 @@ function sheetPay(from,to){
   const amt=()=>pl?r2(Math.min(info.inst,s.amount)):r2(s.amount/months);
   openSheet('จ่ายให้'+rcv.name,`
    <div><div class="label">ยอดค้างทั้งหมด</div><div class="big num">${baht(s.amount,2)}</div></div>
+   ${pendingTo(t,from,to)?`<div class="alert">${ic('clock',20)}<div class="grow"><b>แจ้งโอนไปแล้ว ${baht(pendingTo(t,from,to),2)}</b><div class="muted">ยังรอ${esc(rcv.name)}ยืนยัน ยอดนี้ยังไม่หัก ถ้าโอนไปแล้วไม่ต้องโอนซ้ำ</div></div></div>`:''}
    ${pl?`<div class="alert plain"><div class="grow"><b>งวดที่ ${info.count+1} จาก ${pl.months}</b><div class="steps" style="margin-top:6px">${Array.from({length:pl.months},(_,k)=>`<i class="${k<info.count?'on':''}"></i>`).join('')}</div><div class="muted" style="margin-top:4px">ครบกำหนด ${fmtD(info.due)}</div></div></div>`:''}
    ${canInst?`<div><div class="label" style="margin-bottom:6px">ยอดเยอะ แบ่งจ่ายเป็นงวดรายเดือนได้</div><div class="plans">
       ${[1,2,3].map(n=>`<button data-mo="${n}" aria-pressed="${n===1}"><b class="num">${n===1?'จ่ายเต็ม':n+' งวด'}</b><span class="muted num">${n===1?baht(s.amount):baht(Math.ceil(s.amount/n))+'/เดือน'}</span></button>`).join('')}</div></div>`:''}
@@ -760,8 +785,9 @@ function sheetPay(from,to){
     sh.querySelector('#paid').onclick=async()=>{
       const a=amt();let planId=pl?.id;const ops=[];
       if(!pl&&months>1){planId=uid();ops.push({op:'put',col:'plans',id:planId,doc:{trip:t.id,from,to,total:s.amount,months,startedAt:nowISO()}})}
-      ops.push({op:'put',col:'payments',id:uid(),doc:{trip:t.id,from,to,amount:a,confirmed:false,createdAt:nowISO(),...(planId?{plan:planId}:{})}});
-      closeSheet();if(await send(ops))toast(`บันทึกแล้ว รอ${rcv.name}ยืนยัน`);
+      const auto=!rcv.claimed;   // a friend without an account can't confirm, so it counts right away
+      ops.push({op:'put',col:'payments',id:uid(),doc:{trip:t.id,from,to,amount:a,confirmed:auto,createdAt:nowISO(),...(planId?{plan:planId}:{})}});
+      closeSheet();if(await send(ops))toast(auto?'บันทึกการจ่ายแล้ว':`บันทึกแล้ว รอ${rcv.name}ยืนยัน ยอดจะหักเมื่อยืนยัน`);
     };
   });
 }
@@ -790,6 +816,10 @@ function sheetLedger(other){
   const runLbl=v=>v>0.009?o.name+'ค้าง '+baht(v,2):v<-0.009?'คุณค้าง '+baht(-v,2):'เคลียร์แล้ว';
   const line=r=>{
     const v=r.v,cls=v>0?'pos-t':'neg-t',sign=v>0?'+':'−';
+    if(r.kind==='pay'&&!r.p.confirmed){const p=r.p,fromMe=p.from===me;
+      return `<div class="row"><span class="cat">${ic('clock',17)}</span><div class="grow"><div class="t">${fromMe?'คุณแจ้งว่าโอนให้ '+esc(o.name):esc(o.name)+' แจ้งว่าโอนให้คุณ'}</div>
+        <div class="muted num">${fmtD(p.createdAt)} · รอ${fromMe?esc(o.name):'คุณ'}ยืนยัน ยังไม่หักยอด</div></div>
+        <div class="amt num muted">${baht(p.amount,2)}</div></div>`}
     if(r.kind==='pay'){const p=r.p,fromMe=p.from===me;
       return `<div class="row"><span class="cat">${ic('check',17)}</span><div class="grow"><div class="t">${fromMe?'คุณโอนให้ '+esc(o.name):esc(o.name)+' โอนให้คุณ'}</div>
         <div class="muted num">${fmtD(p.createdAt)}${p.confirmed?'':' · รอยืนยัน'}</div></div>

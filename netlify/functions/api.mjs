@@ -16,7 +16,7 @@
 //   POST   /api/groups/:id/leave            remove from my list
 //   DELETE /api/groups/:id                  delete (group creator only)
 import { getStore } from "@netlify/blobs";
-import { newGroup, applyOps, joinGroup, memberOf, viewFor, previewOf, validGroupId, rid, HttpError } from "../lib/groups.mjs";
+import { newGroup, applyOps, joinGroup, memberOf, amountOwed, hasOpenDebts, viewFor, previewOf, validGroupId, rid, HttpError } from "../lib/groups.mjs";
 import { hashPassword, verifyPassword, signSession, readSession, cleanUsername, checkPassword, cleanProfile, newSecret, readCookie, sessionCookie, SESSION_DAYS } from "../lib/auth.mjs";
 
 const COOKIE = "sp_session";
@@ -217,6 +217,10 @@ export async function handle(req, stores) {
     }
 
     if (action === "leave" && M === "POST") {
+      // You can't walk away from a group while you still owe someone in it.
+      const g = await groups.get(id, { type: "json" });
+      const m = g && memberOf(g, me.id);
+      if (m) { const owed = amountOwed(g, m.id); if (owed > 0) return json({ error: "still_owe", amount: owed }, 409); }
       await mutate(users, userKey(me.username), u => { u.groups = (u.groups || []).filter(x => x !== id); });
       return json({ ok: true });
     }
@@ -224,6 +228,7 @@ export async function handle(req, stores) {
     if (!action && M === "DELETE") {
       const g = await loadMember();
       if (g.owner !== memberOf(g, me.id).id) throw new HttpError(403, "owner_only");
+      if (hasOpenDebts(g)) throw new HttpError(409, "has_debts");   // nobody's debts vanish with the group
       await groups.delete(id);
       await mutate(users, userKey(me.username), u => { u.groups = (u.groups || []).filter(x => x !== id); });
       return json({ ok: true });

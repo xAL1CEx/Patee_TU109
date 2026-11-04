@@ -67,11 +67,11 @@ await test("signed-out requests are refused", async () => {
   assert.equal((await stranger("POST", "/api/groups", { meta: { name: "x" } })).status, 401);
 });
 
-let gid, invite;
+let gid, invite, tonMid;
 await test("host creates a group and gets an invite", async () => {
   const r = await ton("POST", "/api/groups", { meta: { name: "ทริปเชียงใหม่", kind: "ทริป" } });
   assert.equal(r.status, 201);
-  gid = r.body.group.id; invite = r.body.group.invite;
+  gid = r.body.group.id; invite = r.body.group.invite; tonMid = r.body.group.me;
   assert.ok(gid && invite);
   assert.equal(r.body.group.members[r.body.group.me].name, "ต้น");
   assert.equal(r.body.group.members[r.body.group.me].uid, undefined, "account ids are not exposed");
@@ -130,18 +130,48 @@ await test("nobody can edit or remove someone else's account member", async () =
 });
 
 await test("expenses sync between the two accounts; rev polling", async () => {
-  const r = await prae("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "put", col: "expenses", id: "e1", doc: { trip: gid, title: "ข้าวซอย", amount: 900 } }] });
+  const r = await prae("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "put", col: "expenses", id: "e1", doc: { trip: gid, title: "ข้าวซอย", amount: 900, payer: offlineId, split: { [offlineId]: 450, [tonMid]: 450 } } }] });
   const rev = r.body.group.rev;
   assert.deepEqual((await ton("GET", `/api/groups/${gid}?rev=${rev}`)).body, { unchanged: true, rev });
   assert.equal((await ton("GET", `/api/groups/${gid}`)).body.group.expenses.e1.amount, 900);
 });
 
 await test("concurrent writes from both phones all survive", async () => {
-  const w = (p, n) => p("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "put", col: "expenses", id: "c" + n, doc: { amount: n } }] });
+  const w = (p, n) => { const who = p === ton ? tonMid : offlineId; return p("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "put", col: "expenses", id: "c" + n, doc: { amount: n, payer: who, split: { [who]: n } } }] }); };
   const rs = await Promise.all([w(ton, 1), w(prae, 2), w(ton, 3), w(prae, 4)]);
   rs.forEach(r => assert.equal(r.status, 200));
   const ids = Object.keys((await ton("GET", `/api/groups/${gid}`)).body.group.expenses);
   for (const id of ["c1", "c2", "c3", "c4"]) assert.ok(ids.includes(id));
+});
+
+await test("only the payer records an expense; only who recorded it can change it", async () => {
+  const put = (p, id, doc) => p("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "put", col: "expenses", id, doc }] });
+  // ton can't say that prae (who has an account) paid
+  assert.equal((await put(ton, "f1", { amount: 300, payer: offlineId, split: { [tonMid]: 300 } })).body.error, "payer_must_record");
+  // ...but can record for a friend with no account
+  await ton("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "put", col: "members", id: "nobody", doc: { name: "บอส" } }] });
+  const ok = await put(ton, "f2", { amount: 300, payer: "nobody", split: { [tonMid]: 150, nobody: 150 }, by: offlineId });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.group.expenses.f2.by, tonMid, "the server sets who recorded it");
+  // prae can't edit or delete what ton or prae's friends didn't let her
+  assert.equal((await put(prae, "f2", { amount: 1, payer: "nobody", split: { nobody: 1 } })).body.error, "not_your_expense");
+  assert.equal((await prae("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "del", col: "expenses", id: "f2" }] })).body.error, "not_your_expense");
+  assert.equal((await ton("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "del", col: "expenses", id: "e1" }] })).body.error, "not_your_expense");
+  // amounts and splits must add up
+  assert.equal((await put(ton, "f3", { amount: 100, payer: tonMid, split: { [tonMid]: 60 } })).body.error, "bad_split");
+  assert.equal((await put(ton, "f4", { amount: -5, payer: tonMid, split: { [tonMid]: -5 } })).body.error, "bad_amount");
+  // the owner can still edit and delete their own
+  assert.equal((await put(ton, "f2", { amount: 200, payer: "nobody", split: { [tonMid]: 100, nobody: 100 } })).status, 200);
+  assert.equal((await ton("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "del", col: "expenses", id: "f2" }] })).status, 200);
+});
+
+await test("you can't leave a group while you still owe someone", async () => {
+  // ton owes prae 450 for the ข้าวซอย
+  const r = await ton("POST", `/api/groups/${gid}/leave`);
+  assert.equal(r.status, 409);
+  assert.equal(r.body.error, "still_owe");
+  assert.equal(r.body.amount, 450);
+  assert.deepEqual((await ton("GET", "/api/me")).body.groups.map(g => g.id), [gid]);
 });
 
 await test("log in on a new device sees the same groups", async () => {
@@ -168,7 +198,27 @@ await test("password change signs out other devices", async () => {
   assert.equal((await ton("GET", "/api/me")).status, 200, "the device that changed it stays signed in");
 });
 
-await test("only the creator can delete; leaving keeps history", async () => {
+await test("a transfer only counts once the receiver confirms it; only they can confirm", async () => {
+  const ops = (p, o) => p("POST", `/api/groups/${gid}/ops`, { ops: [o] });
+  // ton reports paying prae the 450 he owes
+  const r = await ops(ton, { op: "put", col: "payments", id: "pay1", doc: { from: tonMid, to: offlineId, amount: 450, confirmed: true } });
+  assert.equal(r.body.group.payments.pay1.confirmed, false, "the sender can't confirm their own transfer");
+  // still owing until prae confirms, so ton still can't leave and the group can't be deleted
+  assert.equal((await ton("POST", `/api/groups/${gid}/leave`)).body.error, "still_owe");
+  assert.equal((await ton("DELETE", `/api/groups/${gid}`)).body.error, "has_debts");
+  // nobody else can report transfers for other people, or confirm someone else's
+  assert.equal((await ops(prae, { op: "put", col: "payments", id: "pay2", doc: { from: tonMid, to: "nobody", amount: 1 } })).body.error, "not_your_payment");
+  assert.equal((await ops(ton, { op: "put", col: "payments", id: "pay1", doc: { confirmed: true } })).body.error, "payment_locked");
+  assert.equal((await ops(prae, { op: "put", col: "payments", id: "pay1", doc: { amount: 1, confirmed: false } })).body.error, "payment_locked");
+  // prae confirms; now ton is clear
+  const c = await ops(prae, { op: "put", col: "payments", id: "pay1", doc: { confirmed: true, amount: 1 } });
+  assert.equal(c.body.group.payments.pay1.confirmed, true);
+  assert.equal(c.body.group.payments.pay1.amount, 450, "confirming can't change the amount");
+  // the sender can no longer withdraw a confirmed transfer
+  assert.equal((await ops(ton, { op: "del", col: "payments", id: "pay1" })).body.error, "payment_locked");
+});
+
+await test("only the creator can delete, and only once nobody owes anybody; leaving keeps history", async () => {
   assert.equal((await prae("DELETE", `/api/groups/${gid}`)).status, 403);
   await prae("POST", `/api/groups/${gid}/leave`);
   assert.deepEqual((await prae("GET", "/api/me")).body.groups, []);
