@@ -1,0 +1,13 @@
+{
+  "name": "splitly",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "netlify dev",
+    "deploy": "netlify deploy --prod",
+    "test": "node test/groups.test.mjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^11.1.5"
+  }
+}

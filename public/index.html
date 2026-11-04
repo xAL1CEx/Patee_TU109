@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Splitly</title>
+<meta name="description" content="หารค่าใช้จ่ายทริปและกลุ่มกับเพื่อน พร้อม QR พร้อมเพย์">
+<meta name="theme-color" content="#ffffff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Splitly">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600&family=Noto+Sans+Thai:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js" defer></script>
+<script src="/app.js" defer></script>
+</head>
+<body>
+<div class="app">
+  <header class="top gut">
+    <div class="logo"><i></i>Splitly</div>
+    <button class="trip-pick" id="tripPick" hidden aria-label="เลือกกลุ่ม"></button>
+    <button class="me-btn" id="meBtn" hidden aria-label="โปรไฟล์ของฉัน"></button>
+  </header>
+  <main id="view" class="gut"></main>
+  <div class="tabs" id="tabsWrap" hidden><nav id="tabs"></nav></div>
+</div>
+<div id="sheetRoot"></div>
+<div id="toastRoot"></div>
+<noscript>Splitly ต้องเปิด JavaScript</noscript>
+</body>
+</html>

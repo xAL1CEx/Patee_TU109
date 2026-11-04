@@ -1,0 +1,13 @@
+{
+  "name": "Splitly",
+  "short_name": "Splitly",
+  "description": "หารค่าใช้จ่ายทริปและกลุ่มกับเพื่อน พร้อม QR พร้อมเพย์",
+  "lang": "th",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
