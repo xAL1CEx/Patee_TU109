@@ -66,6 +66,13 @@ function readDates(sh,px){
 const fmtD=iso=>{if(!iso)return '';const d=new Date(iso.length===10?iso+'T00:00:00':iso);return isNaN(d)?'':d.getDate()+' '+TH_M[d.getMonth()]};
 const addMonths=(iso,n)=>{const d=new Date(iso);d.setMonth(d.getMonth()+n);return d.toISOString()};
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+// Codex: keep these IDs in sync with the CSS palettes; this per-device preference is persisted locally.
+const THEMES={light:'Light',dark:'Dark',dracula:'Dracula',cream:'Cream',ocean:'Ocean',forest:'Forest',earth:'Earth',sunset:'Sunset'};
+let theme=LS.get('sp-theme','light');
+if(!Object.hasOwn(THEMES,theme))theme='light';
+document.documentElement.dataset.theme=theme;
+function themePicker(){return `<section class="theme-setting"><div class="f">เลือกธีม</div><div class="seg">${Object.entries(THEMES).map(([id,label])=>`<button type="button" data-theme-choice="${id}" aria-pressed="${theme===id}">${label}</button>`).join('')}</div></section>`}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-theme-choice]');if(!b)return;theme=b.dataset.themeChoice;if(!Object.hasOwn(THEMES,theme))return;LS.set('sp-theme',theme);document.documentElement.dataset.theme=theme;document.querySelectorAll('[data-theme-choice]').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.themeChoice===theme))});
 function eqSplit(ids,amt){const s={},n=ids.length,cents=Math.round(amt*100),b=Math.floor(cents/n);ids.forEach((id,i)=>s[id]=(b+(i<cents-b*n?1:0))/100);return s}
 
 /* ================= account state (from server) ================= */
@@ -333,6 +340,7 @@ function vAuth(){
         <hr class="sep"><h2>โปรไฟล์ของคุณ</h2><p class="muted" style="margin:0">เพื่อนในกลุ่มจะเห็นชื่อเล่น และช่องทางรับเงินนี้ไว้โอนคืนคุณ</p>${personFields({})}`:''}
       <button class="btn block" type="submit" id="au-go">${reg?'สมัครและเริ่มใช้งาน':'เข้าสู่ระบบ'}</button>
     </form>
+    ${themePicker()}
   </div>`;
 }
 const AUTH_ERR={username_taken:'ชื่อผู้ใช้นี้มีคนใช้แล้ว ลองชื่ออื่น',bad_username:'ชื่อผู้ใช้ใช้ได้เฉพาะ a-z, 0-9, _ และ . ยาว 3–20 ตัว',bad_password:'รหัสผ่านต้องยาวอย่างน้อย 8 ตัวอักษร',
@@ -381,7 +389,7 @@ function vJoin(){
 
 function expRow(e){
   const mine=e.split?.[me]||0;
-  return `<button class="row" data-exp="${e.id}"><span class="cat">${ic(e.cat||'other',18)}</span>
+  return `<button class="row" data-exp="${e.id}"><span class="cat cat-${e.cat||'other'}">${ic(e.cat||'other',18)}</span>
    <div class="grow"><div class="t">${esc(e.title)}</div><div class="muted">${fmtD(e.date)} · ${e.payer===me?'คุณจ่าย':esc(P(e.payer).name)+' จ่าย'}<span class="tag">${esc(e.act||'')}</span></div></div>
    <div class="amt num">${baht(e.amount)}<div class="muted" style="font-weight:400">${mine?'ส่วนคุณ '+baht(mine):'ไม่เกี่ยวกับคุณ'}${canEditExp(e)?'':' '+ic('lock',11)}</div></div></button>`;
 }
@@ -658,8 +666,10 @@ function sheetMembers(){
 
 function sheetPerson(id){
   const isMe=!id||id===me, p=isMe?profile:D.people[id];
+  // Codex: place appearance controls directly after profile/payment fields so the setting is easy to find.
   openSheet(isMe?'บัญชีของคุณ':'ข้อมูลของ '+p.name,`${isMe?`<div class="kv"><span class="av lg me">${esc(profile.name[0])}</span><div class="grow"><div class="label">ชื่อผู้ใช้</div><b>@${esc(user.username)}</b></div></div>`:''}
    ${personFields(p,'pf',isMe)}
+   ${isMe?themePicker():''}
    ${isMe?'<p class="muted" style="margin:0">ใช้กับบัญชีของคุณทุกเครื่อง และอัปเดตให้กลุ่มที่กำลังดูอยู่</p>':''}
    <button class="btn block" id="pf-save">บันทึก</button>
    ${isMe?`<hr class="sep"><details class="box" style="padding:12px 14px"><summary style="cursor:pointer;font-weight:600">เปลี่ยนรหัสผ่าน</summary><form id="pw-form" style="display:grid;gap:10px;margin-top:12px" novalidate>
@@ -825,7 +835,7 @@ function sheetLedger(other){
         <div class="muted num">${fmtD(p.createdAt)}${p.confirmed?'':' · รอยืนยัน'}</div></div>
         <div class="amt num ${cls}">${sign}${baht(Math.abs(v),2)}<div class="muted" style="font-weight:400">${runLbl(r.run)}</div></div></div>`}
     const e=r.e,iPaid=e.payer===me;
-    return `<button class="row" data-ledexp="${e.id}"><span class="cat">${ic(e.cat||'other',18)}</span><div class="grow"><div class="t">${esc(e.title)}</div>
+    return `<button class="row" data-ledexp="${e.id}"><span class="cat cat-${e.cat||'other'}">${ic(e.cat||'other',18)}</span><div class="grow"><div class="t">${esc(e.title)}</div>
       <div class="muted num">${fmtD(e.date)} · ${iPaid?`คุณจ่าย ${baht(e.amount)} · ส่วน${esc(o.name)}`:`${esc(o.name)} จ่าย ${baht(e.amount)} · ส่วนคุณ`} ${baht(Math.abs(v),2)}</div></div>
       <div class="amt num ${cls}">${sign}${baht(Math.abs(v),2)}<div class="muted" style="font-weight:400">${runLbl(r.run)}</div></div></button>`;
   };
