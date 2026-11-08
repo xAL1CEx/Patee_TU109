@@ -139,8 +139,11 @@ button.row:hover .t{color:var(--blue)}
 .sheet-h{display:flex;align-items:center;gap:10px}
 .sheet-h h3{margin:0;font-size:22px;font-weight:600;letter-spacing:-.03em;flex:1}
 .x{border:0;background:var(--fog);border-radius:50%;width:32px;height:32px;display:grid;place-items:center;flex:none;color:var(--ink)}
-label.f{display:grid;gap:6px;font-size:13px;color:var(--ink2)}
+label.f{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;font-size:13px;color:var(--ink2);min-width:0}
 .inp{width:100%;border:1px solid var(--field);background:var(--canvas);border-radius:4px;padding:10px 12px;font-size:15px;color:var(--ink);min-width:0}
+/* iOS Safari sizes date fields to their content and ignores width:100%, which pushed the whole sheet wider than the screen */
+input[type=date].inp{-webkit-appearance:none;appearance:none;display:block;max-width:100%;min-height:44px;text-align:left}
+input[type=date].inp::-webkit-date-and-time-value{text-align:left;margin:0}
 .inp:focus{border-color:var(--blue);outline:none;box-shadow:0 0 0 1px var(--blue)}
 .inp.amount{font-size:32px;font-weight:600;letter-spacing:-.03em;padding:8px 12px}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}

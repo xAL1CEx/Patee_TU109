@@ -72,7 +72,14 @@ let theme=LS.get('sp-theme','light');
 if(!Object.hasOwn(THEMES,theme))theme='light';
 document.documentElement.dataset.theme=theme;
 function themePicker(){return `<section class="theme-setting"><div class="f">เลือกธีม</div><div class="seg">${Object.entries(THEMES).map(([id,label])=>`<button type="button" data-theme-choice="${id}" aria-pressed="${theme===id}">${label}</button>`).join('')}</div></section>`}
-document.addEventListener('click',e=>{const b=e.target.closest('[data-theme-choice]');if(!b)return;theme=b.dataset.themeChoice;if(!Object.hasOwn(THEMES,theme))return;LS.set('sp-theme',theme);document.documentElement.dataset.theme=theme;document.querySelectorAll('[data-theme-choice]').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.themeChoice===theme))});
+document.addEventListener('click',e=>{const b=e.target.closest('[data-theme-choice]');if(!b)return;theme=b.dataset.themeChoice;if(!Object.hasOwn(THEMES,theme))return;LS.set('sp-theme',theme);document.documentElement.dataset.theme=theme;document.querySelectorAll('[data-theme-choice]').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.themeChoice===theme)))});
+// percentages -> baht, in whole satang, so the parts always add up to the total exactly
+function pctSplit(ps,amt){
+  const ids=Object.keys(ps),S=ids.reduce((a,k)=>a+ps[k],0),cents=Math.round(amt*100);
+  const raw=ids.map(k=>cents*ps[k]/S),fl=raw.map(Math.floor);let left=cents-fl.reduce((a,v)=>a+v,0);
+  raw.map((v,i)=>[v-fl[i],i]).sort((a,b)=>b[0]-a[0]).forEach(([,i])=>{if(left>0){fl[i]++;left--}});
+  const out={};ids.forEach((k,i)=>{if(fl[i]>0)out[k]=fl[i]/100});return out;
+}
 function eqSplit(ids,amt){const s={},n=ids.length,cents=Math.round(amt*100),b=Math.floor(cents/n);ids.forEach((id,i)=>s[id]=(b+(i<cents-b*n?1:0))/100);return s}
 
 /* ================= account state (from server) ================= */
@@ -724,6 +731,9 @@ function sheetExpense(id){
    <button class="btn block" id="ex-save">บันทึก</button>
    ${old?'<button class="btn danger block" id="ex-del">ลบรายการนี้</button>':''}`,sh=>{
     const amtEl=sh.querySelector('#ex-amt');
+    let unit='baht';           // custom split can be typed in baht or in percent
+    const cuVals={};           // what's typed per person; kept while switching views or units
+    if(old)Object.keys(old.split).forEach(k=>cuVals[k]=String(old.split[k]));
     const drawPayer=()=>sh.querySelector('#ex-payer').innerHTML=payers.map(m=>`<button data-p="${m}" aria-pressed="${m===payer}">${av(m)}${esc(nm(m))}</button>`).join('');
     const drawSplit=()=>{
       sh.querySelectorAll('#ex-mode [data-m]').forEach(x=>x.setAttribute('aria-pressed',x.dataset.m===mode2));
@@ -732,8 +742,16 @@ function sheetExpense(id){
         sh.querySelector('#ex-split').innerHTML=`<div class="who">${t.members.map(m=>`<button data-s="${m}" aria-pressed="${sel.has(m)}">${av(m)}${esc(nm(m))}</button>`).join('')}</div>
           <p class="muted num" style="margin:8px 0 0">${sel.size?`คนละ ${baht(amt/sel.size,2)} · ${sel.size} คน`:'เลือกอย่างน้อย 1 คน'}</p>`;
       }else{
-        sh.querySelector('#ex-split').innerHTML=t.members.map(m=>`<div class="split-row">${av(m)}<span style="flex:1">${esc(nm(m))}</span><input class="inp num" id="cu-${m}" data-cu="${m}" inputmode="decimal" placeholder="0" value="${old&&old.split[m]?old.split[m]:''}"></div>`).join('')+`<p class="muted num" id="cu-left" style="margin:6px 0 0"></p>`;
-        const upd=()=>{const s=[...sh.querySelectorAll('[data-cu]')].reduce((a,i)=>a+(+i.value||0),0),a=+amtEl.value||0;sh.querySelector('#cu-left').innerHTML=`ใส่แล้ว ${baht(s,2)} จาก ${baht(a,2)}${Math.abs(a-s)>0.01?` · <span class="neg-t">ต่างกัน ${baht(r2(a-s),2)}</span>`:''}`};
+        const isP=unit==='pct';
+        sh.querySelector('#ex-split').innerHTML=`<div class="seg" id="ex-unit" style="margin-bottom:6px"><button type="button" data-u="baht" aria-pressed="${!isP}">บาท ฿</button><button type="button" data-u="pct" aria-pressed="${isP}">เปอร์เซ็นต์ %</button></div>`
+          +t.members.map(m=>`<div class="split-row">${av(m)}<span style="flex:1">${esc(nm(m))}</span><input class="inp num" data-cu="${m}" inputmode="decimal" placeholder="0" value="${esc(cuVals[m]||'')}"><span class="muted" style="width:14px">${isP?'%':'฿'}</span></div>`).join('')
+          +`<p class="muted num" id="cu-left" style="margin:6px 0 0"></p>`;
+        const upd=()=>{
+          const ins=[...sh.querySelectorAll('[data-cu]')];ins.forEach(i=>cuVals[i.dataset.cu]=i.value);
+          const s=ins.reduce((a,i)=>a+(+i.value||0),0),a=+amtEl.value||0,L=sh.querySelector('#cu-left');
+          if(isP){const d=r2(100-s);L.innerHTML=`ใส่แล้ว ${r2(s)}% จาก 100%${Math.abs(d)>0.05?` · <span class="neg-t">${d>0?'เหลืออีก':'เกินมา'} ${Math.abs(d)}%</span>`:' · ครบแล้ว'}${a>0&&s>0?` · รวม ${baht(a,2)}`:''}`}
+          else L.innerHTML=`ใส่แล้ว ${baht(s,2)} จาก ${baht(a,2)}${Math.abs(a-s)>0.01?` · <span class="neg-t">ต่างกัน ${baht(r2(a-s),2)}</span>`:''}`;
+        };
         sh.querySelectorAll('[data-cu]').forEach(i=>i.oninput=upd);upd();
       }
     };
@@ -744,12 +762,23 @@ function sheetExpense(id){
       if(b.dataset.p){payer=b.dataset.p;drawPayer()}
       if(b.dataset.s){sel.has(b.dataset.s)?sel.delete(b.dataset.s):sel.add(b.dataset.s);drawSplit()}
       if(b.dataset.m){mode2=b.dataset.m;drawSplit()}
+      if(b.dataset.u&&b.dataset.u!==unit){   // convert what's typed so nothing is lost
+        const a=+amtEl.value||0,toP=b.dataset.u==='pct';
+        for(const k in cuVals){const v=+cuVals[k]||0;cuVals[k]=!v?'':toP?(a>0?String(r2(v/a*100)):''):String(r2(v*a/100))}
+        unit=b.dataset.u;drawSplit();
+      }
     });
     sh.querySelector('#ex-save').onclick=async()=>{
       const amt=r2(+amtEl.value||0);
       if(!(amt>0)){toast('ใส่จำนวนเงินก่อน');amtEl.focus();return}
       let split={};
       if(mode2==='eq'){if(!sel.size){toast('เลือกคนหารอย่างน้อย 1 คน');return}split=eqSplit(t.members.filter(m=>sel.has(m)),amt)}
+      else if(unit==='pct'){
+        const ps={};sh.querySelectorAll('[data-cu]').forEach(i=>{const v=+i.value||0;if(v>0)ps[i.dataset.cu]=v});
+        const S=Object.values(ps).reduce((a,v)=>a+v,0);
+        if(Math.abs(S-100)>0.05){toast(`เปอร์เซ็นต์รวมต้องเท่ากับ 100% (ตอนนี้ ${r2(S)}%)`);return}
+        split=pctSplit(ps,amt);
+      }
       else{sh.querySelectorAll('[data-cu]').forEach(i=>{const v=r2(+i.value||0);if(v>0)split[i.dataset.cu]=v});
         const s=Object.values(split).reduce((a,v)=>a+v,0);if(Math.abs(s-amt)>0.01){toast('ยอดที่แบ่งยังไม่เท่ากับยอดรวม');return}}
       const cat=sh.querySelector('#ex-cat').value;
