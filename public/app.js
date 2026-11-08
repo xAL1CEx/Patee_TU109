@@ -880,9 +880,9 @@ function dragScroll(el){
   el.addEventListener('click',e=>{if(moved){e.preventDefault();e.stopPropagation();moved=false}},true);   // a drag is not a click
 }
 function sheetFood(){
-  const t=trip(),RADII=[[500,'500 ม.'],[1000,'1 กม.'],[2000,'2 กม.'],[3000,'3 กม.'],[5000,'5 กม.']];
+  const t=trip();
   let size=Math.min(50,Math.max(1,t.members.length)),rad=LS.get('sp-foodr',1000),loc=LS.get('sp-foodloc',null),last=null,all=false,picked=new Set();
-  if(!RADII.some(r=>r[0]===rad))rad=1000;
+  rad=Math.min(10000,Math.max(1000,Math.round((+rad||1000)/500)*500));   // the slider goes 1–10 km in half-km steps
   if(!(loc&&Number.isFinite(loc.lat)&&Number.isFinite(loc.lng)))loc=null;
   openSheet('ไปกินที่ไหนดี',`
    <div class="kv" style="justify-content:space-between"><div><div class="label">กินกี่คน</div><b class="num" id="fd-n" style="font-size:22px"></b></div>
@@ -891,9 +891,10 @@ function sheetFood(){
      <div class="fd-pop" id="fd-pop">${FOOD_POP.map((x,k)=>`<button class="btn sm line" data-pop="${k}">${esc(x.n)}</button>`).join('')}</div></div>
    <div style="display:flex;gap:8px"><input class="inp" id="fd-q" placeholder="หรือพิมพ์ชื่อสถานที่ เช่น สยามพารากอน" maxlength="80" enterkeyhint="search"><button class="btn line" id="fd-find">ค้นหา</button></div>
    <div id="fd-cands"></div>
-   <div class="two"><label class="f">รัศมี<select class="inp" id="fd-r">${RADII.map(([v,l])=>`<option value="${v}" ${v===rad?'selected':''}>${l}</option>`).join('')}</select></label>
-     <div style="display:grid;gap:6px;align-content:end"><button class="btn sm line" id="fd-gps">ใช้ตำแหน่งของฉัน</button></div></div>
-   <div class="muted">ค้นรอบ: <b id="fd-loc"></b></div>
+   <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span class="muted">ค้นรอบ: <b id="fd-loc"></b></span><button class="btn sm line" id="fd-gps">ใช้ตำแหน่งของฉัน</button></div>
+   <div style="display:grid;gap:2px"><div style="display:flex;justify-content:space-between;align-items:baseline"><span class="label">รัศมีค้นหา</span><b class="num" id="fd-rv" style="font-size:18px"></b></div>
+     <input type="range" class="fd-range" id="fd-r" min="1" max="10" step="0.5" value="${rad/1000}" aria-label="รัศมีค้นหา (กิโลเมตร)">
+     <div class="fd-ticks" aria-hidden="true"><span>1</span><span>4</span><span>7</span><span>10 กม.</span></div></div>
    <div id="fd-out" style="display:grid;gap:10px"></div>
    <p class="note" style="margin:0"><span id="fd-src">ข้อมูลร้านจาก © OpenStreetMap contributors</span> <button class="link" id="fd-again" hidden>ข้อมูลยังไม่ครบ ค้นอีกครั้ง</button> บางร้านยังไม่มีเวลาเปิดหรือเบอร์โทร ส่วนคะแนนรีวิว รูป และการจองดูได้ใน Google Maps</p>`,sh=>{
     const $q=s=>sh.querySelector(s);
@@ -912,6 +913,7 @@ function sheetFood(){
       out.innerHTML=`<div class="sec-h" style="margin:0"><h2>ร้านแนะนำสำหรับ ${size} คน</h2><a class="link" href="https://www.google.com/maps/search/${encodeURIComponent('ร้านอาหาร')}/@${loc.lat},${loc.lng},16z" target="_blank" rel="noopener">ดูคะแนนใน Google Maps</a></div>
         ${chips}
         <p class="note" style="margin:0">${FOOD_HINT[band]} ระบบเดาจากประเภทอาหาร ไม่รู้จำนวนที่นั่งจริง ควรโทรหรือจองก่อนไป</p>
+        ${rad>3000?'<p class="note" style="margin:0">รัศมีเกิน 3 กม. ในเมืองใหญ่มีร้านมากจนแสดงได้แค่ตัวอย่างบางส่วน (ร้านใกล้ตำแหน่งยังพยายามให้ครบก่อน) ลดรัศมีถ้าอยากให้ครบ</p>':''}
         ${all?`<div class="fd-grid">${list.map(({p,fit})=>foodCard(p,fit,band)).join('')}</div>`
           :`<div class="fd-railwrap"><button class="fd-nav prev" aria-label="ก่อนหน้า" hidden>‹</button><div class="fd-rail">${list.map(({p,fit})=>foodCard(p,fit,band)).join('')}</div><button class="fd-nav next" aria-label="ถัดไป">›</button></div>`}
         ${ranked.length>10?`<button class="btn line block" id="fd-all">${all?'แสดงเฉพาะร้านแนะนำ':`ดูทั้งหมด (${ranked.length} ร้าน)`}</button>`:''}`;
@@ -950,7 +952,11 @@ function sheetFood(){
     $q('#fd-again').onclick=run;
     $q('#fd-m').onclick=()=>{if(size>1){size--;drawN();drawResults()}};
     $q('#fd-p').onclick=()=>{if(size<50){size++;drawN();drawResults()}};
-    $q('#fd-r').onchange=e=>{rad=+e.target.value;LS.set('sp-foodr',rad);if(loc)run()};
+    const rv=$q('#fd-r'),rl=$q('#fd-rv');let rt=null;
+    const paintR=()=>{const km=+rv.value;rl.textContent=km+' กม.';rv.style.setProperty('--p',((km-1)/9*100)+'%')};
+    paintR();
+    rv.oninput=paintR;                                                  // the label and the filled track follow the thumb smoothly
+    rv.onchange=()=>{rad=Math.round(+rv.value*1000);LS.set('sp-foodr',rad);clearTimeout(rt);if(loc)rt=setTimeout(run,350)};   // search when you let go
     $q('#fd-pop').onclick=e=>{const b=e.target.closest('[data-pop]');if(!b)return;const x=FOOD_POP[+b.dataset.pop];$q('#fd-cands').innerHTML='';setLoc({lat:x.lat,lng:x.lng,label:x.n})};
     $q('#fd-gps').onclick=()=>{
       if(!navigator.geolocation){toast('เครื่องนี้ไม่รองรับตำแหน่ง ลองเลือกหรือพิมพ์ชื่อสถานที่แทน');return}

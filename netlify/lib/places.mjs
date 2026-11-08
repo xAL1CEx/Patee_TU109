@@ -13,9 +13,9 @@ const NOMINATIM = "https://nominatim.openstreetmap.org/search";
 const UA = "Splitly/1.0 (student prototype; https://github.com/xAL1CEx/Patee_TU109)";
 
 const LAT = [5.5, 20.6], LNG = [97.3, 105.7];           // roughly Thailand
-const RADII = [500, 1000, 2000, 3000, 5000];
+const R_MIN = 500, R_MAX = 10000, NEAR = 1500;   // any radius from 0.5 to 10 km in 500 m steps; NEAR is always asked for separately
 const PLACES_TTL = 30 * 60 * 1000, GEO_TTL = 24 * 60 * 60 * 1000, CACHE_MAX = 200;
-const LIMIT_N = 20, LIMIT_MS = 10 * 60 * 1000;          // searches per person per 10 minutes
+const LIMIT_N = 40, LIMIT_MS = 10 * 60 * 1000;          // searches per person per 10 minutes
 
 const sleep = (ms, signal) => new Promise((ok, no) => {
   const t = setTimeout(ok, ms);
@@ -59,7 +59,8 @@ export function cleanCoords(lat, lng) {
 
 export function cleanRadius(r) {
   const n = Number(r);
-  return RADII.includes(n) ? n : 1000;
+  if (r == null || String(r).trim() === "" || !Number.isFinite(n)) return 1000;
+  return Math.min(R_MAX, Math.max(R_MIN, Math.round(n / 500) * 500));
 }
 
 /* ---------- per-person limit and small caches (in memory: lasts while the function instance is warm) ---------- */
@@ -116,8 +117,8 @@ export function inferCuisine(name) {
 }
 
 /* ---------- restaurants (Overpass) ---------- */
-export function overpassQuery(lat, lng, r) {
-  return `[out:json][timeout:8];nwr(around:${r},${lat},${lng})[amenity~"^(restaurant|food_court)$"][name];out center tags 200;`;
+export function overpassQuery(lat, lng, r, limit = 200) {
+  return `[out:json][timeout:8];nwr(around:${r},${lat},${lng})[amenity~"^(restaurant|food_court)$"][name];out center tags ${limit};`;
 }
 
 // Ask the mirrors one after another-ish: the first starts now, the next ones start only if it is slow or fails.
@@ -243,40 +244,61 @@ export function sameName(a, b) {
   return hit(A.thai, B.thai) || hit(A.latin, B.latin);
 }
 
-export function mergePlaces(osm, fsq) {
-  const out = osm.map(p => ({ ...p, src: ["osm"] }));
-  for (const f of fsq) {
+// Put `extra` into `base`: a place found in both is shown once, and gaps in the base entry are filled from the extra one.
+function mergeLists(base, extra, cap) {
+  const out = base.map(p => ({ ...p, src: [...p.src] }));
+  for (const f of extra) {
     const twin = out.find(o => meters(o.lat, o.lng, f.lat, f.lng) < 80 && sameName(o.name, f.name));
-    if (!twin) { out.push({ ...f, src: ["fsq"] }); continue; }
-    if (!twin.cuisine.length) twin.cuisine = f.cuisine;              // keep OpenStreetMap's entry, fill its gaps
-    if (!twin.phone) twin.phone = f.phone;
-    if (!twin.web) twin.web = f.web;
+    if (!twin) { out.push({ ...f, src: [...f.src] }); continue; }
+    if (!twin.cuisine.length) twin.cuisine = f.cuisine;
+    for (const k of ["hours", "phone", "web"]) if (!twin[k]) twin[k] = f[k];
     if (!/[฀-๿]/.test(twin.name) && /[฀-๿]/.test(f.name)) twin.name = f.name;
-    twin.src.push("fsq");
+    for (const s of f.src) if (!twin.src.includes(s)) twin.src.push(s);
   }
   out.sort((a, b) => a.dist - b.dist);
-  return out.slice(0, 150);
+  return out.slice(0, cap);
 }
+export const mergePlaces = (osm, fsq) =>
+  mergeLists(osm.map(p => ({ ...p, src: ["osm"] })), fsq.map(p => ({ ...p, src: ["fsq"] })), 150);
 
-export async function searchPlaces(params, deps = {}) {
-  const { lat, lng } = cleanCoords(params.get("lat"), params.get("lng"));
-  const r = cleanRadius(params.get("r"));
-  const key = `p:${lat.toFixed(3)}:${lng.toFixed(3)}:${r}`;
+// One search area: OpenStreetMap + Foursquare, merged. Cached, but a half answer is never kept.
+async function area(lat, lng, r, deps) {
+  const key = `s:${lat.toFixed(3)}:${lng.toFixed(3)}:${r}`;
   const hit = cached(key, PLACES_TTL);
   if (hit) return hit;
   const f = deps.fetch || fetch;
   const fsqKey = deps.fsqKey ?? process.env.FOURSQUARE_API_KEY ?? "";
   const [o, q] = await Promise.allSettled([
-    overpass(overpassQuery(lat, lng, r), f, deps.hedgeMs ?? 3000),
+    overpass(overpassQuery(lat, lng, r, r > 2000 ? 300 : 200), f, deps.hedgeMs ?? 3000),
     fsqKey ? foursquare(lat, lng, r, fsqKey, f) : Promise.resolve(null),
   ]);
   const osmOk = o.status === "fulfilled", fsqOk = q.status === "fulfilled" && Array.isArray(q.value);
   if (!osmOk && !fsqOk) throw new HttpError(503, "places_unavailable");   // one working source is enough
-  const places = mergePlaces(osmOk ? normalize(o.value.elements, lat, lng) : [], fsqOk ? normalizeFsq(q.value, lat, lng) : []);
-  const partial = !osmOk || Boolean(fsqKey && !fsqOk);                     // a source we meant to use didn't answer
-  const value = { places, radius: r, sources: [...(osmOk ? ["OpenStreetMap"] : []), ...(fsqOk ? ["Foursquare"] : [])], partial };
-  if (osmOk && (fsqOk || !fsqKey)) remember(key, value);                   // don't keep a half answer for half an hour
+  const value = {
+    places: mergePlaces(osmOk ? normalize(o.value.elements, lat, lng) : [], fsqOk ? normalizeFsq(q.value, lat, lng) : []),
+    sources: [...(osmOk ? ["OpenStreetMap"] : []), ...(fsqOk ? ["Foursquare"] : [])],
+    partial: !osmOk || Boolean(fsqKey && !fsqOk),                          // a source we meant to use didn't answer
+  };
+  if (!value.partial) remember(key, value);
   return value;
+}
+
+export async function searchPlaces(params, deps = {}) {
+  const { lat, lng } = cleanCoords(params.get("lat"), params.get("lng"));
+  const r = cleanRadius(params.get("r"));
+  // Past ~1.5 km a busy city has more places than one query can return, and what comes back is a spread-out sample
+  // (not the nearest ones). So the area right around the person is always asked for on its own and kept in full.
+  const jobs = [area(lat, lng, r, deps), ...(r > NEAR ? [area(lat, lng, NEAR, deps)] : [])];
+  const done = await Promise.allSettled(jobs);
+  const ok = done.filter(d => d.status === "fulfilled").map(d => d.value);
+  if (!ok.length) throw new HttpError(503, "places_unavailable");
+  const [wide, near] = ok.length === 2 ? [ok[0], ok[1]] : [ok[0], null];
+  return {
+    places: near ? mergeLists(near.places, wide.places, 200) : wide.places,
+    radius: r,
+    sources: [...new Set(ok.flatMap(a => a.sources))],
+    partial: ok.length < jobs.length || ok.some(a => a.partial),
+  };
 }
 
 /* ---------- place names (Nominatim; its policy: at most one request per second) ---------- */

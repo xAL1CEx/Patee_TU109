@@ -236,3 +236,13 @@ details.box{border:1px solid var(--line);border-radius:8px}
 .fd-nav{display:none;position:absolute;top:58px;z-index:2;width:38px;height:38px;border-radius:50%;border:1px solid var(--hair);background:var(--canvas);color:var(--ink);box-shadow:0 2px 10px rgb(0 0 0 / .2);font-size:24px;line-height:1;place-items:center;padding:0 0 3px;cursor:pointer}
 .fd-nav.prev{left:-8px}.fd-nav.next{right:-8px}
 @media (hover:hover) and (pointer:fine){.fd-nav{display:grid}}
+/* radius slider */
+.fd-range{-webkit-appearance:none;appearance:none;width:100%;height:30px;margin:0;background:transparent;cursor:pointer;--p:0%}
+.fd-range:focus{outline:none}
+.fd-range::-webkit-slider-runnable-track{height:6px;border-radius:99px;background:linear-gradient(to right,var(--blue) var(--p),var(--hair) var(--p))}
+.fd-range::-webkit-slider-thumb{-webkit-appearance:none;width:24px;height:24px;margin-top:-9px;border-radius:50%;background:var(--canvas);border:3px solid var(--blue);box-shadow:0 2px 8px rgb(0 0 0 / .25);transition:transform .12s}
+.fd-range:active::-webkit-slider-thumb,.fd-range:focus-visible::-webkit-slider-thumb{transform:scale(1.15)}
+.fd-range::-moz-range-track{height:6px;border-radius:99px;background:var(--hair)}
+.fd-range::-moz-range-progress{height:6px;border-radius:99px;background:var(--blue)}
+.fd-range::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:var(--canvas);border:3px solid var(--blue);box-shadow:0 2px 8px rgb(0 0 0 / .25)}
+.fd-ticks{display:flex;justify-content:space-between;font-size:11px;color:var(--ink3);padding:0 2px}

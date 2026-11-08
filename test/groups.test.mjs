@@ -420,11 +420,57 @@ await test("food type is guessed from the name when the data has none", async ()
   assert.deepEqual(r.body.places.find(p => p.name === "Coffee Palace").cuisine, ["thai"], "an explicit tag wins over the name");
 });
 
+await test("radius: any distance from 0.5 to 10 km; for big radii the area around you is asked for on its own and reused", async () => {
+  const bodies = [];
+  const f = async (url, opts = {}) => { if (opts.body) bodies.push(decodeURIComponent(String(opts.body))); return okJson(OVERPASS); };
+  const u = phone({ fetch: f, hedgeMs: 5, fsqKey: "" });
+  await u("POST", "/api/auth/register", { username: "radiususer", password: "radiuspass12", profile: { name: "ร", pp: "0811110011" } });
+  const radii = () => bodies.map(b => +b.match(/around:(\d+)/)[1]);
+  const go = async r => (await u("GET", `/api/places?lat=16.0&lng=103.0&r=${r}`)).body;
+
+  const small = await go(1000);
+  assert.deepEqual(radii(), [1000], "a small radius is a single search");
+  assert.equal(small.radius, 1000);
+
+  bodies.length = 0;
+  const big = await go(8000);
+  assert.deepEqual(radii().sort((a, b) => a - b), [1500, 8000], "a big radius also asks for the area around you");
+  assert.equal(big.radius, 8000);
+  assert.equal(big.places.length, 3, "the same place from both searches is shown once");
+
+  bodies.length = 0;
+  await go(9000);
+  assert.deepEqual(radii(), [9000], "the nearby area is reused when you move the slider");
+
+  bodies.length = 0;
+  assert.equal((await go(7300)).radius, 7500, "rounded to the nearest 500 m");
+  assert.equal((await go(25000)).radius, 10000, "10 km is the most");
+  assert.equal((await go(10400)).radius, 10000);
+  assert.equal((await go(1250)).radius, 1500, "half-km steps");
+  assert.equal((await go(100)).radius, 500, "and 0.5 km the least");
+  assert.equal((await go("abc")).radius, 1000, "nonsense falls back to 1 km");
+});
+
+await test("radius: if the nearby search fails but the wide one works, you still get results (marked incomplete)", async () => {
+  let n = 0;
+  const f = async (url, opts = {}) => {
+    const r = +decodeURIComponent(String(opts.body || "")).match(/around:(\d+)/)?.[1];
+    if (r === 1500) throw new Error("nearby failed");
+    n++; return okJson(OVERPASS);
+  };
+  const u = phone({ fetch: f, hedgeMs: 5, fsqKey: "" });
+  await u("POST", "/api/auth/register", { username: "nearfail", password: "nearfailpass1", profile: { name: "น", pp: "0811110012" } });
+  const r = await u("GET", "/api/places?lat=17.0&lng=104.0&r=6000");
+  assert.equal(r.status, 200);
+  assert.equal(r.body.partial, true);
+  assert.equal(r.body.places.length, 3);
+});
+
 await test("searches are limited per person", async () => {
   const busy = phone({ fetch: async () => okJson(OVERPASS), hedgeMs: 5 });
   await busy("POST", "/api/auth/register", { username: "busyuser", password: "busypass123", profile: { name: "ว", pp: "0811110003" } });
   let last;
-  for (let i = 0; i < 21; i++) last = await busy("GET", "/api/places?lat=14.0717&lng=100.6045");
+  for (let i = 0; i < 41; i++) last = await busy("GET", "/api/places?lat=14.0717&lng=100.6045");
   assert.equal(last.status, 429);
   assert.equal(last.body.error, "slow_down");
 });
