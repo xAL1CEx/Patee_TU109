@@ -4,6 +4,8 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
+// Local keys (e.g. FOURSQUARE_API_KEY) live in an untracked .env file next to package.json
+try { process.loadEnvFile(fileURLToPath(new URL("../.env", import.meta.url))); } catch { /* no .env: that's fine */ }
 import { handle } from "../netlify/functions/api.mjs";
 import { memStore } from "./memstore.mjs";
 

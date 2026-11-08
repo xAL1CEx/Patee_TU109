@@ -437,6 +437,7 @@ function vHome(t){
     <button data-open="editTrip">${ic('edit',22)}<span>ตั้งค่ากลุ่ม</span></button>
   </div>
   ${alerts(t)}
+  <button class="btn line block" data-open="food">${ic('food',18)} ไปกินที่ไหนดี? หาร้านอาหารให้กลุ่ม</button>
   <section><div class="sec-h"><h2>รายการล่าสุด</h2>${ex.length?'<button class="link" data-tab="list">ดูทั้งหมด</button>':''}</div>
     <div class="box list">${ex.slice(-4).reverse().map(expRow).join('')||`<div class="empty">ยังไม่มีค่าใช้จ่าย<button class="btn sm" data-open="addExp">เพิ่มรายการแรก</button></div>`}</div></section>
   <section><div class="sec-h"><h2>ยอดระหว่างคุณกับเพื่อน</h2></div>
@@ -790,6 +791,194 @@ function sheetExpense(id){
   });
 }
 
+/* ================= where to eat (OpenStreetMap data through /api/places) ================= */
+const FOOD_TH={thai:'อาหารไทย',isan:'อีสาน',regional:'อาหารท้องถิ่น',local:'อาหารท้องถิ่น',chinese:'อาหารจีน',dim_sum:'ติ่มซำ',japanese:'ญี่ปุ่น',sushi:'ซูชิ',ramen:'ราเมน',korean:'เกาหลี',korean_bbq:'หมูกระทะเกาหลี',barbecue:'ปิ้งย่าง',bbq:'ปิ้งย่าง',grill:'ปิ้งย่าง',hot_pot:'ชาบู/หม้อไฟ',shabu:'ชาบู',buffet:'บุฟเฟ่ต์',seafood:'อาหารทะเล',fish:'อาหารทะเล',noodle:'ก๋วยเตี๋ยว',noodles:'ก๋วยเตี๋ยว',steak_house:'สเต็ก',steak:'สเต็ก',pizza:'พิซซ่า',pasta:'พาสต้า',italian:'อิตาเลียน',burger:'เบอร์เกอร์',sandwich:'แซนด์วิช',vietnamese:'เวียดนาม',indian:'อินเดีย',vegetarian:'มังสวิรัติ',vegan:'วีแกน',coffee_shop:'คาเฟ่',cafe:'คาเฟ่',breakfast:'อาหารเช้า',international:'นานาชาติ',asian:'เอเชีย',french:'ฝรั่งเศส',mexican:'เม็กซิกัน',dessert:'ของหวาน',chicken:'ไก่',cake:'เค้ก',bakery:'เบเกอรี่',ice_cream:'ไอศกรีม',juice:'น้ำผลไม้',tea:'ชา',bubble_tea:'ชานม',pub:'ผับ/บาร์',tapas:'ทาปาส',salad:'สลัด',soup:'ซุป',rice:'ข้าว',curry:'แกง'};
+// Which food suits which group size. OpenStreetMap doesn't know how many seats a place has, so this is only a guess from the type of food.
+const FOOD_FIT={
+  large:new Set(['barbecue','bbq','grill','korean_bbq','hot_pot','shabu','buffet','chinese','seafood','fish','thai','isan','regional','local','dim_sum']),
+  medium:new Set(['thai','isan','regional','local','chinese','seafood','fish','barbecue','bbq','grill','korean_bbq','hot_pot','shabu','japanese','korean','vietnamese','dim_sum']),
+  small:new Set(['noodle','noodles','ramen','sushi','burger','pizza','steak_house','steak','pasta','sandwich','coffee_shop','cafe','breakfast','korean','vietnamese','japanese','thai'])};
+const FOOD_BIG=new Set(['barbecue','bbq','grill','korean_bbq','hot_pot','shabu','buffet']);
+const FOOD_TAG={large:'มักรับกลุ่มใหญ่ได้',medium:'แบ่งกันกินได้',small:'เหมาะกับคนน้อย'};
+const FOOD_HINT={large:'กลุ่มใหญ่ (6 คนขึ้นไป) ขึ้นร้านที่มักมีโต๊ะใหญ่หรือแบ่งกันกิน เช่น ปิ้งย่าง ชาบู บุฟเฟ่ต์ ก่อน',medium:'กลุ่ม 4–5 คน ขึ้นร้านที่สั่งมาแบ่งกันกินได้ก่อน',small:'กลุ่มเล็ก (1–3 คน) ขึ้นร้านจานเดียวหรือนั่งสบายก่อน'};
+const FOOD_ERR={outside_thailand:'ตอนนี้รองรับเฉพาะในประเทศไทย',places_unavailable:'ระบบข้อมูลร้านตอบช้า ลองใหม่อีกครั้งในสักครู่',slow_down:'ค้นถี่เกินไป รอสักครู่แล้วลองใหม่',bad_location:'ตำแหน่งไม่ถูกต้อง',bad_query:'พิมพ์ชื่อสถานที่ก่อน',offline:'ไม่มีอินเทอร์เน็ต'};
+// Places most groups start from: tap one instead of typing (coordinates checked against OpenStreetMap)
+const FOOD_POP=[{n:'มธ.รังสิต',lat:14.0728,lng:100.6069},{n:'มธ.ท่าพระจันทร์',lat:13.7576,lng:100.4906},{n:'สยาม',lat:13.7468,lng:100.535},{n:'จุฬาฯ',lat:13.7431,lng:100.5329},{n:'ฟิวเจอร์พาร์ค รังสิต',lat:13.989,lng:100.6184},{n:'เซ็นทรัลเวิลด์',lat:13.7466,lng:100.539},{n:'เมกาบางนา',lat:13.6471,lng:100.6805},{n:'จตุจักร',lat:13.8003,lng:100.5511},{n:'ม.เชียงใหม่',lat:18.8009,lng:98.9522},{n:'นิมมาน เชียงใหม่',lat:18.7981,lng:98.9705},{n:'พัทยา',lat:12.9367,lng:100.8865}];
+// No photos in the data, so each card gets a food picture and colour from its type of food.
+const FOOD_LOOK=[
+  [['barbecue','bbq','grill','korean_bbq','steak_house','steak'],'🥩','#ff9966','#ff5e62'],
+  [['hot_pot','shabu'],'🍲','#ffb347','#ff7e5f'],
+  [['buffet'],'🍽️','#f7971e','#ffd200'],
+  [['noodle','noodles','ramen','vietnamese'],'🍜','#f7b733','#fc4a1a'],
+  [['sushi','japanese'],'🍣','#ff9a9e','#fad0c4'],
+  [['chinese','dim_sum'],'🥟','#f6d365','#fda085'],
+  [['seafood','fish'],'🦐','#43cea2','#2b8cc4'],
+  [['pizza','italian','pasta'],'🍕','#ffb88c','#de6262'],
+  [['burger','sandwich'],'🍔','#f9d423','#ff4e50'],
+  [['coffee_shop','cafe','cake','bakery','dessert','ice_cream','tea','bubble_tea','juice','breakfast'],'☕','#c79081','#dfa579'],
+  [['vegetarian','vegan','salad'],'🥗','#96e6a1','#46b86c'],
+  [['thai','isan','regional','local','indian','curry','rice','chicken','soup'],'🍛','#f6d365','#ff9a56'],
+  [['korean'],'🍱','#fbc2eb','#a6c1ee']];
+const foodLook=p=>FOOD_LOOK.find(l=>p.cuisine.some(c=>l[0].includes(c)))||[null,'🍽️','#c3cfe2','#8ea2c4'];
+// Filter chips: a place matches when any of its food types is in the list (a place can be in several)
+const FOOD_CATS=[
+  {k:'cafe',l:'ร้านกาแฟ/คาเฟ่',t:['cafe','coffee_shop','tea','bubble_tea','juice','breakfast']},
+  {k:'dessert',l:'ของหวาน/เบเกอรี่',t:['dessert','bakery','cake','ice_cream']},
+  {k:'noodle',l:'ก๋วยเตี๋ยว/เส้น',t:['noodle','noodles','ramen','vietnamese']},
+  {k:'thai',l:'อาหารไทย/อีสาน',t:['thai','isan','regional','local','rice','curry','soup']},
+  {k:'korean',l:'เกาหลี',t:['korean','korean_bbq']},
+  {k:'japanese',l:'ญี่ปุ่น',t:['japanese','sushi','ramen']},
+  {k:'grill',l:'ปิ้งย่าง/ชาบู/บุฟเฟ่ต์',t:['barbecue','bbq','grill','korean_bbq','hot_pot','shabu','buffet']},
+  {k:'chinese',l:'อาหารจีน',t:['chinese','dim_sum']},
+  {k:'seafood',l:'อาหารทะเล',t:['seafood','fish']},
+  {k:'western',l:'ฟาสต์ฟู้ด/ตะวันตก',t:['pizza','italian','pasta','burger','sandwich','steak_house','steak','french','mexican','international']},
+  {k:'veg',l:'มังสวิรัติ/สลัด',t:['vegetarian','vegan','salad']},
+  {k:'other',l:'ไม่ระบุประเภท',t:[]}];
+const catsOf=p=>FOOD_CATS.filter(c=>c.k==='other'?!p.cuisine.length:p.cuisine.some(x=>c.t.includes(x))).map(c=>c.k);
+const DAY_TH={Mo:'จ.',Tu:'อ.',We:'พ.',Th:'พฤ.',Fr:'ศ.',Sa:'ส.',Su:'อา.',PH:'วันหยุด'};
+const fmtHours=h=>String(h||'').replace(/Mo-Su/g,'ทุกวัน').replace(/\b(Mo|Tu|We|Th|Fr|Sa|Su|PH)\b/g,d=>DAY_TH[d]).replace(/\boff\b/gi,'ปิด').replace(/;\s*/g,' · ');
+const sizeBand=n=>n>=6?'large':n>=4?'medium':'small';
+const fmtDist=d=>d<1000?d+' ม.':(d/1000).toFixed(1)+' กม.';
+function foodScore(p,size){
+  const band=sizeBand(size),fit=p.cuisine.some(c=>FOOD_FIT[band].has(c));
+  let s=fit?2:0;
+  if(band==='large'&&p.cuisine.some(c=>FOOD_BIG.has(c)))s+=1;
+  if(p.phone||p.web)s+=1;            // can be contacted to book
+  if(p.hours)s+=0.5;
+  s-=Math.min(2.5,p.dist/2000);      // nearer is better
+  return {s,fit};
+}
+function foodCard(p,fit,band){
+  const [,emo,c1,c2]=foodLook(p);
+  const labels=[...new Set(p.cuisine.map(c=>FOOD_TH[c]||c.replace(/_/g,' ')))];
+  const chips=[...labels.slice(0,2),p.phone?'โทรได้':'',p.web?'มีเว็บไซต์':''].filter(Boolean);
+  const maps='https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(p.name+' '+p.lat+','+p.lng);
+  return `<article class="fd-card"><div class="fd-hero" style="--a:${c1};--b:${c2}"><span aria-hidden="true">${emo}</span><b class="fd-dist">${fmtDist(p.dist)}</b></div>
+    <div class="fd-body"><div class="fd-lab">${esc(fit?FOOD_TAG[band]:(labels[0]||'ร้านอาหาร'))}</div><h4 class="fd-name">${esc(p.name)}</h4>
+     <div class="fd-meta">${esc(fmtHours(p.hours)||'ไม่มีข้อมูลเวลาเปิด')}</div>
+     <div class="fd-chips">${chips.map(c=>`<span class="fd-chip">${esc(c)}</span>`).join('')}</div>
+     <div class="acts"><a class="btn sm" href="${esc(maps)}" target="_blank" rel="noopener">Google Maps</a>${p.phone?`<a class="btn sm line" href="tel:${esc(p.phone.replace(/[^\d+]/g,''))}">โทร</a>`:''}${p.web?`<a class="btn sm line" href="${esc(p.web)}" target="_blank" rel="noopener noreferrer">เว็บ</a>`:''}</div></div></article>`;
+}
+// Click-and-drag scrolling for the horizontal rows (touch screens already scroll by swiping, a mouse can't)
+function dragScroll(el){
+  if(!el||el.dataset.drag)return;el.dataset.drag='1';
+  let down=false,moved=false,sx=0,sl=0,pid=null;
+  el.addEventListener('dragstart',e=>e.preventDefault());           // no ghost image when dragging a link
+  el.addEventListener('pointerdown',e=>{
+    if(e.pointerType!=='mouse'||e.button!==0)return;
+    down=true;moved=false;sx=e.clientX;sl=el.scrollLeft;pid=e.pointerId;
+    e.preventDefault();                                              // no text selection while dragging
+  });
+  el.addEventListener('pointermove',e=>{
+    if(!down)return;
+    const dx=e.clientX-sx;
+    if(!moved&&Math.abs(dx)>5){moved=true;el.classList.add('dragging');try{el.setPointerCapture(pid)}catch(err){}}   // keep following the mouse outside the row
+    if(moved)el.scrollLeft=sl-dx;
+  });
+  const end=()=>{if(!down)return;down=false;el.classList.remove('dragging');try{el.releasePointerCapture(pid)}catch(err){}};
+  el.addEventListener('pointerup',end);el.addEventListener('pointercancel',end);el.addEventListener('lostpointercapture',end);
+  el.addEventListener('click',e=>{if(moved){e.preventDefault();e.stopPropagation();moved=false}},true);   // a drag is not a click
+}
+function sheetFood(){
+  const t=trip(),RADII=[[500,'500 ม.'],[1000,'1 กม.'],[2000,'2 กม.'],[3000,'3 กม.'],[5000,'5 กม.']];
+  let size=Math.min(50,Math.max(1,t.members.length)),rad=LS.get('sp-foodr',1000),loc=LS.get('sp-foodloc',null),last=null,all=false,picked=new Set();
+  if(!RADII.some(r=>r[0]===rad))rad=1000;
+  if(!(loc&&Number.isFinite(loc.lat)&&Number.isFinite(loc.lng)))loc=null;
+  openSheet('ไปกินที่ไหนดี',`
+   <div class="kv" style="justify-content:space-between"><div><div class="label">กินกี่คน</div><b class="num" id="fd-n" style="font-size:22px"></b></div>
+     <div style="display:flex;gap:8px"><button class="btn sm line" id="fd-m" aria-label="ลดจำนวนคน">−</button><button class="btn sm line" id="fd-p" aria-label="เพิ่มจำนวนคน">+</button></div></div>
+   <div style="display:grid;gap:8px"><span class="label">เลือกสถานที่</span>
+     <div class="fd-pop" id="fd-pop">${FOOD_POP.map((x,k)=>`<button class="btn sm line" data-pop="${k}">${esc(x.n)}</button>`).join('')}</div></div>
+   <div style="display:flex;gap:8px"><input class="inp" id="fd-q" placeholder="หรือพิมพ์ชื่อสถานที่ เช่น สยามพารากอน" maxlength="80" enterkeyhint="search"><button class="btn line" id="fd-find">ค้นหา</button></div>
+   <div id="fd-cands"></div>
+   <div class="two"><label class="f">รัศมี<select class="inp" id="fd-r">${RADII.map(([v,l])=>`<option value="${v}" ${v===rad?'selected':''}>${l}</option>`).join('')}</select></label>
+     <div style="display:grid;gap:6px;align-content:end"><button class="btn sm line" id="fd-gps">ใช้ตำแหน่งของฉัน</button></div></div>
+   <div class="muted">ค้นรอบ: <b id="fd-loc"></b></div>
+   <div id="fd-out" style="display:grid;gap:10px"></div>
+   <p class="note" style="margin:0"><span id="fd-src">ข้อมูลร้านจาก © OpenStreetMap contributors</span> <button class="link" id="fd-again" hidden>ข้อมูลยังไม่ครบ ค้นอีกครั้ง</button> บางร้านยังไม่มีเวลาเปิดหรือเบอร์โทร ส่วนคะแนนรีวิว รูป และการจองดูได้ใน Google Maps</p>`,sh=>{
+    const $q=s=>sh.querySelector(s);
+    const drawN=()=>{$q('#fd-n').textContent=size+' คน'};
+    const drawLoc=()=>{$q('#fd-loc').textContent=loc?loc.label:'ยังไม่ได้เลือก'};
+    const drawResults=()=>{
+      const out=$q('#fd-out');
+      if(!last){out.innerHTML='';return}
+      if(!last.length){out.innerHTML='<div class="empty">ไม่พบร้านในรัศมีนี้ ลองขยายรัศมีหรือเลือกที่อื่น</div>';return}
+      const counts={};last.forEach(p=>catsOf(p).forEach(k=>counts[k]=(counts[k]||0)+1));
+      [...picked].forEach(k=>{if(!counts[k])picked.delete(k)});          // a type with no places here can't stay selected
+      const pool=picked.size?last.filter(p=>catsOf(p).some(k=>picked.has(k))):last;
+      const band=sizeBand(size),ranked=pool.map(p=>({p,...foodScore(p,size)})).sort((a,b)=>b.s-a.s);
+      const list=all?ranked:ranked.slice(0,10);
+      const chips=`<div class="fd-pop" id="fd-cats"><button class="btn sm ${picked.size?'line':''}" data-cat="*">ทั้งหมด ${last.length}</button>${FOOD_CATS.filter(c=>counts[c.k]).map(c=>`<button class="btn sm ${picked.has(c.k)?'':'line'}" data-cat="${c.k}" aria-pressed="${picked.has(c.k)}">${esc(c.l)} ${counts[c.k]}</button>`).join('')}</div>`;
+      out.innerHTML=`<div class="sec-h" style="margin:0"><h2>ร้านแนะนำสำหรับ ${size} คน</h2><a class="link" href="https://www.google.com/maps/search/${encodeURIComponent('ร้านอาหาร')}/@${loc.lat},${loc.lng},16z" target="_blank" rel="noopener">ดูคะแนนใน Google Maps</a></div>
+        ${chips}
+        <p class="note" style="margin:0">${FOOD_HINT[band]} ระบบเดาจากประเภทอาหาร ไม่รู้จำนวนที่นั่งจริง ควรโทรหรือจองก่อนไป</p>
+        ${all?`<div class="fd-grid">${list.map(({p,fit})=>foodCard(p,fit,band)).join('')}</div>`
+          :`<div class="fd-railwrap"><button class="fd-nav prev" aria-label="ก่อนหน้า" hidden>‹</button><div class="fd-rail">${list.map(({p,fit})=>foodCard(p,fit,band)).join('')}</div><button class="fd-nav next" aria-label="ถัดไป">›</button></div>`}
+        ${ranked.length>10?`<button class="btn line block" id="fd-all">${all?'แสดงเฉพาะร้านแนะนำ':`ดูทั้งหมด (${ranked.length} ร้าน)`}</button>`:''}`;
+      $q('#fd-cats').onclick=e=>{const b=e.target.closest('[data-cat]');if(!b)return;const k=b.dataset.cat;if(k==='*')picked.clear();else picked.has(k)?picked.delete(k):picked.add(k);all=false;drawResults()};
+      const b=$q('#fd-all');if(b)b.onclick=()=>{all=!all;drawResults()};
+      dragScroll($q('#fd-cats'));
+      const rail=$q('.fd-rail');
+      if(rail){
+        dragScroll(rail);
+        const prev=$q('.fd-nav.prev'),next=$q('.fd-nav.next');
+        const upd=()=>{prev.hidden=rail.scrollLeft<8;next.hidden=rail.scrollLeft+rail.clientWidth>=rail.scrollWidth-8};
+        rail.addEventListener('scroll',upd,{passive:true});upd();
+        prev.onclick=()=>rail.scrollBy({left:-rail.clientWidth*0.85,behavior:'smooth'});
+        next.onclick=()=>rail.scrollBy({left:rail.clientWidth*0.85,behavior:'smooth'});
+      }
+    };
+    const run=async()=>{
+      if(!loc){toast('เลือกสถานที่ก่อน');return}
+      $q('#fd-out').innerHTML='<div class="empty" style="background:none"><div class="spin"></div>กำลังหาร้านอาหาร…</div>';
+      try{
+        let r;
+        try{r=await api(`/places?lat=${loc.lat}&lng=${loc.lng}&r=${rad}`)}
+        catch(e){if(e.code!=='places_unavailable')throw e;r=await api(`/places?lat=${loc.lat}&lng=${loc.lng}&r=${rad}`)}   // free servers are sometimes slow: try once more
+        if(!sh.isConnected)return;
+        last=r.places;all=false;
+        $q('#fd-src').textContent='ข้อมูลร้านจาก '+(r.sources||['OpenStreetMap']).map(x=>x==='OpenStreetMap'?'© OpenStreetMap contributors':x).join(' และ ');
+        $q('#fd-again').hidden=!r.partial;
+        drawResults();
+      }catch(err){
+        if(!sh.isConnected)return;
+        last=null;$q('#fd-out').innerHTML=`<div class="empty">${esc(FOOD_ERR[err.code]||'ค้นไม่สำเร็จ ลองใหม่อีกครั้ง')}<button class="btn sm" id="fd-retry">ลองใหม่</button></div>`;
+        $q('#fd-retry').onclick=run;
+      }
+    };
+    const setLoc=l=>{loc=l;LS.set('sp-foodloc',l);drawLoc();run()};
+    $q('#fd-again').onclick=run;
+    $q('#fd-m').onclick=()=>{if(size>1){size--;drawN();drawResults()}};
+    $q('#fd-p').onclick=()=>{if(size<50){size++;drawN();drawResults()}};
+    $q('#fd-r').onchange=e=>{rad=+e.target.value;LS.set('sp-foodr',rad);if(loc)run()};
+    $q('#fd-pop').onclick=e=>{const b=e.target.closest('[data-pop]');if(!b)return;const x=FOOD_POP[+b.dataset.pop];$q('#fd-cands').innerHTML='';setLoc({lat:x.lat,lng:x.lng,label:x.n})};
+    $q('#fd-gps').onclick=()=>{
+      if(!navigator.geolocation){toast('เครื่องนี้ไม่รองรับตำแหน่ง ลองเลือกหรือพิมพ์ชื่อสถานที่แทน');return}
+      toast('กำลังหาตำแหน่ง…');
+      navigator.geolocation.getCurrentPosition(
+        pos=>{if(sh.isConnected)setLoc({lat:+pos.coords.latitude.toFixed(5),lng:+pos.coords.longitude.toFixed(5),label:'ตำแหน่งของคุณ'})},
+        ()=>toast('ขอตำแหน่งไม่ได้ อนุญาตการใช้ตำแหน่ง หรือเลือกสถานที่แทน'),
+        {timeout:10000,maximumAge:300000});
+    };
+    const find=async()=>{
+      const q=$q('#fd-q').value.trim(),box=$q('#fd-cands');
+      if(q.length<2){toast('พิมพ์ชื่อสถานที่ก่อน');return}
+      box.innerHTML='<div class="muted">กำลังค้นหา…</div>';
+      try{
+        const r=await api('/geocode?q='+encodeURIComponent(q));
+        if(!sh.isConnected)return;
+        box.innerHTML=r.results.length?`<div class="box list">${r.results.map((c,k)=>`<button class="row" data-pick="${k}"><div class="grow"><div class="t">${esc(c.name)}</div><div class="muted">${esc(c.detail)}</div></div>${ic('chev',16)}</button>`).join('')}</div>`
+          :'<div class="muted">ไม่พบสถานที่นี้ ลองพิมพ์ชื่อเต็มหรือเติมชื่อจังหวัด หรือเลือกจากสถานที่ด้านบน หรือกด "ใช้ตำแหน่งของฉัน"</div>';
+        box.onclick=e=>{const b=e.target.closest('[data-pick]');if(!b)return;const c=r.results[+b.dataset.pick];box.innerHTML='';setLoc({lat:c.lat,lng:c.lng,label:c.name})};
+      }catch(err){if(sh.isConnected)box.innerHTML=`<div class="muted">${esc(FOOD_ERR[err.code]||'ค้นไม่สำเร็จ ลองใหม่อีกครั้ง')}</div>`}
+    };
+    $q('#fd-find').onclick=find;
+    $q('#fd-q').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();find()}};
+    dragScroll($q('#fd-pop'));
+    drawN();drawLoc();if(loc)run();
+  });
+}
+
 function sheetPay(from,to){
   const t=trip(),s=settle(t).find(x=>x.from===from&&x.to===to);if(!s){toast('ยอดนี้เคลียร์แล้ว');return}
   const rcv=P(to),pl=activePlan(t,from,to),info=pl&&planInfo(pl);
@@ -911,6 +1100,7 @@ document.addEventListener('click',async e=>{
   if(ds.open==='members')return sheetMembers();
   if(ds.open==='editTrip')return sheetTripEdit();
   if(ds.open==='invite')return sheetInvite();
+  if(ds.open==='food')return sheetFood();
   if(ds.exp)return sheetExpense(ds.exp);
   if(ds.pay){const[f,t]=ds.pay.split('|');return sheetPay(f,t)}
   if(ds.remind)return sheetRemind(ds.remind);

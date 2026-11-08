@@ -17,6 +17,7 @@
 //   DELETE /api/groups/:id                  delete (group creator only)
 import { getStore } from "@netlify/blobs";
 import { newGroup, applyOps, joinGroup, memberOf, amountOwed, hasOpenDebts, viewFor, previewOf, validGroupId, rid, HttpError } from "../lib/groups.mjs";
+import { searchPlaces, findPlace, limitPerUser } from "../lib/places.mjs";
 import { hashPassword, verifyPassword, signSession, readSession, cleanUsername, checkPassword, cleanProfile, newSecret, readCookie, sessionCookie, SESSION_DAYS } from "../lib/auth.mjs";
 
 const COOKIE = "sp_session";
@@ -92,7 +93,7 @@ async function groupList(stores, user) {
 const addGroupToUser = (users, user, gid) =>
   mutate(users, userKey(user.username), u => { u.groups = [...new Set([...(u.groups || []), gid])]; });
 
-export async function handle(req, stores) {
+export async function handle(req, stores, deps = {}) {
   try {
     const { users, groups } = stores;
     const url = new URL(req.url);
@@ -158,6 +159,13 @@ export async function handle(req, stores) {
         return json({ user: publicUser({ ...me, profile: p }) });
       }
       return json({ error: "method_not_allowed" }, 405);
+    }
+
+    /* ---------- where to eat (OpenStreetMap data) ---------- */
+    if ((seg[1] === "places" || seg[1] === "geocode") && seg.length === 2) {
+      if (M !== "GET") return json({ error: "method_not_allowed" }, 405);
+      limitPerUser(me.id);
+      return json(seg[1] === "places" ? await searchPlaces(url.searchParams, deps) : await findPlace(url.searchParams, deps));
     }
 
     /* ---------- groups ---------- */

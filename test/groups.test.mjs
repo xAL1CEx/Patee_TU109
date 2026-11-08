@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
 import { handle } from "../netlify/functions/api.mjs";
+import { inferCuisine } from "../netlify/lib/places.mjs";
 import { memStore } from "./memstore.mjs";
+delete process.env.FOURSQUARE_API_KEY;   // tests must never depend on a real key
 
 const stores = { groups: memStore(), users: memStore() };
 
 // A tiny "phone": keeps its own session cookie.
-function phone() {
+function phone(deps) {
   let cookie = "";
   return async (method, path, body) => {
     const res = await handle(new Request("https://splitly.test" + path, {
       method, headers: { cookie }, body: body ? JSON.stringify(body) : undefined,
-    }), stores);
+    }), stores, deps);
     const sc = res.headers.get("set-cookie");
     if (sc) cookie = sc.split(";")[0];
     return { status: res.status, body: await res.json(), setCookie: sc };
@@ -224,6 +226,207 @@ await test("only the creator can delete, and only once nobody owes anybody; leav
   assert.deepEqual((await prae("GET", "/api/me")).body.groups, []);
   assert.equal((await ton("DELETE", `/api/groups/${gid}`)).status, 200);
   assert.equal((await ton("GET", `/api/groups/${gid}`)).status, 404);
+});
+
+/* ---------- where to eat ---------- */
+const el = (type, id, lat, lon, tags) => ({ type, id, ...(type === "way" ? { center: { lat, lon } } : { lat, lon }), tags });
+const OVERPASS = { elements: [
+  el("node", 1, 13.7470, 100.5350, { name: "ครัวอร่อย", cuisine: "Thai; Barbecue", website: "javascript:alert(1)", phone: "02-123 4567", amenity: "restaurant" }),
+  el("way", 2, 13.7468, 100.5351, { name: "ครัวอร่อย", amenity: "restaurant" }),                       // same place mapped twice
+  el("way", 3, 13.7500, 100.5360, { name: "Hot Pot House", cuisine: "hot pot", website: "www.example.com/menu", opening_hours: "Mo-Su 10:00-22:00" }),
+  el("node", 4, 13.7471, 100.5352, { cuisine: "thai" }),                                              // no name
+  { type: "node", id: 5, tags: { name: "ไม่มีพิกัด" } },                                              // no position
+  el("node", 6, 13.7480, 100.5340, { name: "<img src=x onerror=alert(1)>", phone: "ไม่ใช่เบอร์" }),
+] };
+const okJson = body => ({ ok: true, status: 200, json: async () => body });
+
+await test("restaurant search: needs login, stays inside Thailand, cleans the data, falls back to another mirror, caches", async () => {
+  const calls = [];
+  const fakeFetch = async (url) => {
+    calls.push(url);
+    if (url.includes("openstreetmap.fr")) return { ok: false, status: 500, json: async () => ({}) };
+    return okJson(OVERPASS);
+  };
+  const eater = phone({ fetch: fakeFetch, hedgeMs: 10 });
+  assert.equal((await phone({ fetch: async () => { throw new Error("must not be called"); } })("GET", "/api/places?lat=13.7466&lng=100.5347")).status, 401);   // signed out
+  await eater("POST", "/api/auth/register", { username: "eater", password: "eatpass123", profile: { name: "กิน", pp: "0811110000" } });
+  assert.equal((await eater("GET", "/api/places?lat=51.5&lng=-0.1")).body.error, "outside_thailand");
+  assert.equal((await eater("GET", "/api/places?lat=abc&lng=100")).body.error, "bad_location");
+  assert.equal((await eater("GET", "/api/places")).body.error, "bad_location");
+
+  const r = await eater("GET", "/api/places?lat=13.7466&lng=100.5347&r=1000");
+  assert.equal(r.status, 200);
+  const names = r.body.places.map(p => p.name);
+  assert.equal(names.length, 3, "unnamed, positionless and duplicate entries are dropped");
+  assert.equal(names[0], "ครัวอร่อย", "nearest first");
+  const first = r.body.places[0];
+  assert.deepEqual(first.cuisine, ["thai", "barbecue"]);
+  assert.equal(first.web, "", "javascript: links are never passed on");
+  assert.equal(first.phone, "02-123 4567");
+  const pot = r.body.places.find(p => p.name === "Hot Pot House");
+  assert.equal(pot.web, "https://www.example.com/menu");
+  assert.equal(pot.hours, "Mo-Su 10:00-22:00");
+  assert.equal(r.body.places.find(p => p.name.startsWith("<img")).phone, "", "junk phone numbers are dropped");
+  assert.ok(calls[0].includes("openstreetmap.fr") && calls.some(u => u.includes("overpass-api.de")), "tried the next mirror after a failure");
+
+  const before = calls.length;
+  await eater("GET", "/api/places?lat=13.7466&lng=100.5347&r=1000");
+  assert.equal(calls.length, before, "same search again is served from the cache");
+  assert.equal((await eater("GET", "/api/places?lat=13.7466&lng=100.5347&r=99999")).status, 200, "odd radius falls back to a safe one");
+});
+
+await test("restaurant search: an 'I gave up' answer from one mirror is skipped, not shown or cached", async () => {
+  const seen = [];
+  const f = async (url) => { seen.push(url); return url.includes("openstreetmap.fr") ? okJson({ elements: [], remark: "runtime error: Query timed out" }) : okJson(OVERPASS); };
+  const u = phone({ fetch: f, hedgeMs: 10 });
+  await u("POST", "/api/auth/register", { username: "remarkuser", password: "remarkpass1", profile: { name: "ร", pp: "0811110004" } });
+  const r = await u("GET", "/api/places?lat=16.4322&lng=102.8236&r=2000");
+  assert.equal(r.body.places.length, 3, "got the real answer from the next mirror");
+  assert.ok(seen.some(x => x.includes("overpass-api.de")));
+});
+
+await test("restaurant search: all sources down gives a clear error", async () => {
+  const down = phone({ fetch: async () => { throw new Error("offline"); }, hedgeMs: 5 });
+  await down("POST", "/api/auth/register", { username: "downuser", password: "downpass123", profile: { name: "ด", pp: "0811110001" } });
+  const r = await down("GET", "/api/places?lat=18.7999&lng=98.9677");
+  assert.equal(r.status, 503);
+  assert.equal(r.body.error, "places_unavailable");
+});
+
+await test("place-name lookup works, rejects too-short text and is cached", async () => {
+  let n = 0;
+  const geo = phone({ fetch: async (url) => { n++; assert.ok(url.includes("countrycodes=th")); return okJson([{ name: "สยามพารากอน", display_name: "สยามพารากอน, ปทุมวัน, กรุงเทพมหานคร, ประเทศไทย", lat: "13.7468", lon: "100.5347" }, { lat: "x", lon: "y", name: "bad" }]); } });
+  await geo("POST", "/api/auth/register", { username: "geouser", password: "geopass1234", profile: { name: "จ", pp: "0811110002" } });
+  assert.equal((await geo("GET", "/api/geocode?q=a")).body.error, "bad_query");
+  const r = await geo("GET", "/api/geocode?q=" + encodeURIComponent("สยามพารากอน"));
+  assert.equal(r.body.results.length, 1, "entries without a valid position are dropped");
+  assert.deepEqual([r.body.results[0].name, r.body.results[0].lat], ["สยามพารากอน", 13.7468]);
+  await geo("GET", "/api/geocode?q=" + encodeURIComponent("สยามพารากอน"));
+  assert.equal(n, 1, "second lookup is cached");
+});
+
+await test("place-name lookup: abbreviations are spelled out, bus stops come last, other spellings are tried", async () => {
+  const asked = [];
+  const fake = async (url) => {
+    const q = decodeURIComponent(url.split("q=")[1]);
+    asked.push(q);
+    if (q.includes("ไหน")) return okJson([]);
+    return okJson([
+      { name: "ป้ายรถเมล์", type: "bus_stop", display_name: "ป้ายรถเมล์, รังสิต", lat: "14.07", lon: "100.60" },
+      { name: "มหาวิทยาลัยธรรมศาสตร์ ศูนย์รังสิต", type: "university", display_name: "มหาวิทยาลัยธรรมศาสตร์ ศูนย์รังสิต, ปทุมธานี", lat: "14.0728", lon: "100.6069" },
+    ]);
+  };
+  const g = phone({ fetch: fake });
+  await g("POST", "/api/auth/register", { username: "aliasuser", password: "aliaspass12", profile: { name: "อ", pp: "0811110005" } });
+  const r = await g("GET", "/api/geocode?q=" + encodeURIComponent("มธ.รังสิต"));
+  assert.equal(asked[0], "มหาวิทยาลัยธรรมศาสตร์ ศูนย์รังสิต", "the short name is spelled out before asking");
+  assert.equal(r.body.results[0].name, "มหาวิทยาลัยธรรมศาสตร์ ศูนย์รังสิต", "the real place comes first");
+  assert.equal(r.body.results[1].name, "ป้ายรถเมล์", "bus stops come last");
+  asked.length = 0;
+  const none = await g("GET", "/api/geocode?q=" + encodeURIComponent("ที่.ไหน"));
+  assert.deepEqual(none.body.results, []);
+  assert.equal(asked.length, 2, "tried the text as typed and without the dot");
+  await g("GET", "/api/geocode?q=" + encodeURIComponent("ที่.ไหน"));
+  assert.equal(asked.length, 4, "'nothing found' is not remembered");
+});
+
+const FSQ = { results: [
+  { fsq_place_id: "a1", name: "Hot Pot House (ฮอทพอท เฮ้าส์)", latitude: 13.7500, longitude: 100.5361, tel: "02-555 1111", website: "https://hotpot.example", categories: [{ name: "Hotpot Restaurant" }] },  // same place as the OSM entry
+  { fsq_place_id: "a2", name: "ร้านส้มตำป้าแดง", latitude: 13.7452, longitude: 100.5352, tel: "081 222 3333", categories: [{ name: "Som Tum Restaurant" }, { name: "Thai Restaurant" }] },
+  { fsq_place_id: "a3", name: "Rooftop Beer Bar", latitude: 13.7455, longitude: 100.5350, categories: [{ name: "Beer Bar" }] },
+  { fsq_place_id: "a4", name: "ปิดไปแล้ว", latitude: 13.7456, longitude: 100.5351, date_closed: "2024-01-01", categories: [{ name: "Thai Restaurant" }] },
+  { fsq_place_id: "a5", name: "Evil Cafe", latitude: 13.7457, longitude: 100.5352, website: "javascript:alert(1)", tel: "x", categories: [{ name: "Cafe" }] },
+] };
+const router = (log, { osm = true, fsq = 200 } = {}) => async (url, opts = {}) => {
+  log.push({ url, opts });
+  if (url.includes("places-api.foursquare.com")) return fsq === 200 ? okJson(FSQ) : { ok: false, status: fsq, json: async () => ({}) };
+  if (!osm) throw new Error("osm down");
+  return okJson(OVERPASS);
+};
+
+await test("restaurant search merges Foursquare with OpenStreetMap (free fields only, key never leaves the server)", async () => {
+  const log = [];
+  const u = phone({ fetch: router(log), hedgeMs: 10, fsqKey: "test-key-123" });
+  await u("POST", "/api/auth/register", { username: "mergeuser", password: "mergepass12", profile: { name: "ม", pp: "0811110006" } });
+  const r = await u("GET", "/api/places?lat=13.7466&lng=100.5400");
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.sources, ["OpenStreetMap", "Foursquare"]);
+  assert.equal(r.body.partial, false, "both sources answered");
+  const names = r.body.places.map(p => p.name);
+  assert.ok(!names.includes("Rooftop Beer Bar"), "bars are not 'where to eat'");
+  assert.ok(!names.includes("ปิดไปแล้ว"), "closed places are dropped");
+  assert.equal(names.filter(n => n.startsWith("Hot Pot House")).length, 1, "the same place from both sources is shown once");
+  assert.equal(r.body.places.length, 5, "3 from OpenStreetMap + 2 new from Foursquare");
+  const pot = r.body.places.find(p => p.name.startsWith("Hot Pot House"));
+  assert.equal(pot.phone, "02-555 1111", "the phone number is filled in from Foursquare");
+  assert.equal(pot.web, "https://www.example.com/menu", "OpenStreetMap's own data is kept");
+  assert.deepEqual(pot.src, ["osm", "fsq"]);
+  assert.deepEqual(r.body.places.find(p => p.name === "ร้านส้มตำป้าแดง").cuisine, ["isan", "thai"]);
+  const evil = r.body.places.find(p => p.name === "Evil Cafe");
+  assert.deepEqual([evil.web, evil.phone], ["", ""], "junk links and phone numbers are dropped");
+  const call = log.find(c => c.url.includes("places-api.foursquare.com"));
+  assert.equal(call.opts.headers.authorization, "Bearer test-key-123");
+  assert.ok(!/photos|rating|hours|price|popularity|tastes/.test(call.url), "only free fields are requested");
+  assert.ok(!JSON.stringify(r.body).includes("test-key-123"), "the key is never sent to the browser");
+});
+
+await test("restaurant search: a failing source doesn't break it, and a half answer is not kept", async () => {
+  const log = [];
+  const u = phone({ fetch: router(log, { fsq: 429 }), hedgeMs: 10, fsqKey: "k" });
+  await u("POST", "/api/auth/register", { username: "halfuser", password: "halfpass123", profile: { name: "ห", pp: "0811110007" } });
+  const r = await u("GET", "/api/places?lat=13.80&lng=100.60");
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.sources, ["OpenStreetMap"], "falls back to OpenStreetMap alone");
+  assert.equal(r.body.partial, true, "the app is told the answer is incomplete");
+  const fsqCalls = () => log.filter(c => c.url.includes("foursquare")).length;
+  const before = fsqCalls();
+  await u("GET", "/api/places?lat=13.80&lng=100.60");
+  assert.ok(fsqCalls() > before, "asked Foursquare again instead of caching the half answer");
+
+  const only = phone({ fetch: router([], { osm: false }), hedgeMs: 5, fsqKey: "k" });
+  await only("POST", "/api/auth/register", { username: "fsqonly", password: "fsqonlypass1", profile: { name: "ฟ", pp: "0811110008" } });
+  const r2 = await only("GET", "/api/places?lat=14.5&lng=101.0");
+  assert.equal(r2.status, 200, "Foursquare alone is enough when OpenStreetMap is down");
+  assert.deepEqual(r2.body.sources, ["Foursquare"]);
+  assert.equal(r2.body.partial, true);
+  assert.ok(r2.body.places.length >= 2);
+
+  const log3 = [];
+  const none = phone({ fetch: router(log3), hedgeMs: 5, fsqKey: "" });
+  await none("POST", "/api/auth/register", { username: "nokeyuser", password: "nokeypass12", profile: { name: "น", pp: "0811110009" } });
+  await none("GET", "/api/places?lat=15.2&lng=100.3");
+  assert.ok(!log3.some(c => c.url.includes("foursquare")), "no key, no Foursquare call");
+});
+
+await test("food type is guessed from the name when the data has none", async () => {
+  assert.deepEqual(inferCuisine("ก๋วยเตี๋ยวป้าหยวก"), ["noodle"]);
+  assert.deepEqual(inferCuisine("Black Canyon Coffee"), ["cafe"]);
+  assert.deepEqual(inferCuisine("Starbucks Reserve"), ["cafe"]);
+  assert.deepEqual(inferCuisine("Oppa Daek"), ["korean"]);
+  assert.deepEqual(inferCuisine("ร้านหมูกระทะลุงหนวด"), ["barbecue"]);
+  assert.deepEqual(inferCuisine("ชาบูชิ ชาบู"), ["hot_pot"]);
+  assert.deepEqual(inferCuisine("ต้มยำกุ้งแม่น้ำ"), ["thai", "seafood"]);
+  assert.deepEqual(inferCuisine("ครัวมี้"), [], "no clear word, no guess");
+  assert.deepEqual(inferCuisine(""), []);
+  // a place with a cuisine tag keeps it; one without gets a guess
+  const log = [];
+  const u = phone({ fetch: async () => okJson({ elements: [
+    el("node", 21, 15.0010, 101.0010, { name: "Coffee Corner" }),
+    el("node", 22, 15.0011, 101.0011, { name: "Coffee Palace", cuisine: "thai" }),
+  ] }), hedgeMs: 5, fsqKey: "" });
+  await u("POST", "/api/auth/register", { username: "guessuser", password: "guesspass12", profile: { name: "ก", pp: "0811110010" } });
+  const r = await u("GET", "/api/places?lat=15.0&lng=101.0");
+  assert.deepEqual(r.body.places.find(p => p.name === "Coffee Corner").cuisine, ["cafe"]);
+  assert.deepEqual(r.body.places.find(p => p.name === "Coffee Palace").cuisine, ["thai"], "an explicit tag wins over the name");
+});
+
+await test("searches are limited per person", async () => {
+  const busy = phone({ fetch: async () => okJson(OVERPASS), hedgeMs: 5 });
+  await busy("POST", "/api/auth/register", { username: "busyuser", password: "busypass123", profile: { name: "ว", pp: "0811110003" } });
+  let last;
+  for (let i = 0; i < 21; i++) last = await busy("GET", "/api/places?lat=14.0717&lng=100.6045");
+  assert.equal(last.status, 429);
+  assert.equal(last.body.error, "slow_down");
 });
 
 await test("logout clears the cookie", async () => {
