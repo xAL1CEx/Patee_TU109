@@ -466,9 +466,10 @@ function vSum(t){
   if(!ex.length)return `<h1>สรุปรายจ่าย</h1><div class="empty">ยังไม่มีข้อมูลให้สรุป</div>`;
   const byCat={},byAct={},paidBy={},share={};
   ex.forEach(e=>{byCat[e.cat]=(byCat[e.cat]||0)+e.amount;byAct[e.act]=(byAct[e.act]||0)+e.amount;paidBy[e.payer]=(paidBy[e.payer]||0)+e.amount;for(const k in e.split)share[k]=(share[k]||0)+e.split[k]});
-  const bars=(obj,lab,base)=>Object.entries(obj).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div style="display:grid;gap:5px">
+  // Each section has its own color family (--c); inside it a bigger share gets a stronger shade, a smaller share a paler one.
+  const bars=(obj,lab,base)=>{const ent=Object.entries(obj).sort((a,b)=>b[1]-a[1]),mx=ent.length?ent[0][1]:1;return ent.map(([k,v])=>`<div style="display:grid;gap:5px">
     <div style="display:flex;justify-content:space-between;gap:8px"><span>${lab(k)}</span><span class="num">${baht(r2(v))} <span class="muted">${Math.round(v/base*100)}%</span></span></div>
-    <div class="bar"><i style="width:${v/base*100}%"></i></div></div>`).join('');
+    <div class="bar"><i style="width:${v/base*100}%;--r:${(v/mx).toFixed(3)}"></i></div></div>`).join('')};
   return `<div><h1>สรุปรายจ่าย</h1><div class="muted">${esc(t.name)} · ${ex.length} รายการ</div></div>
   <div class="stats">
     <div class="stat"><span class="label">รวมทั้งหมด</span><b class="num">${baht(total)}</b></div>
@@ -476,9 +477,9 @@ function vSum(t){
     <div class="stat"><span class="label">เฉลี่ยต่อคน</span><b class="num">${baht(Math.round(total/t.members.length))}</b></div>
     <div class="stat"><span class="label">คุณสำรองจ่าย</span><b class="num">${baht(paidBy[me]||0)}</b></div>
   </div>
-  <section class="panel"><h2>ตามหมวดหมู่</h2>${bars(byCat,k=>CATS[k]||k,total)}</section>
-  <section class="panel"><h2>ตามกิจกรรม</h2>${bars(byAct,k=>esc(k),total)}</section>
-  <section class="panel"><h2>แต่ละคนใช้ไปเท่าไร</h2>${bars(share,k=>esc(P(k).name)+(k===me?' (คุณ)':''),total)}</section>`;
+  <section class="panel sumsec s1"><h2>ตามหมวดหมู่</h2>${bars(byCat,k=>CATS[k]||k,total)}</section>
+  <section class="panel sumsec s2"><h2>ตามกิจกรรม</h2>${bars(byAct,k=>esc(k),total)}</section>
+  <section class="panel sumsec s3"><h2>แต่ละคนใช้ไปเท่าไร</h2>${bars(share,k=>esc(P(k).name)+(k===me?' (คุณ)':''),total)}</section>`;
 }
 
 function vSettle(t){

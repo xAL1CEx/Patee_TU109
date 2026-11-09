@@ -134,6 +134,8 @@ button.row:hover .t{color:var(--blue)}
 .sheet{background:var(--canvas);width:100%;max-width:520px;max-height:92%;overflow:auto;border-radius:8px 8px 0 0;
   padding-block:10px 0;display:flex;flex-direction:column;gap:16px;animation:up .2s ease-out}
 .sheet>*:last-child{margin-bottom:calc(20px + env(safe-area-inset-bottom,0px))}
+/* A tall sheet scrolls; it must never squash what is inside it (buttons, fields, boxes shrank to half height on phones) */
+.sheet>*{flex-shrink:0}
 @keyframes up{from{transform:translateY(24px);opacity:.6}}
 @media (prefers-reduced-motion:reduce){.sheet{animation:none}}
 .grip{width:36px;height:4px;border-radius:9px;background:var(--card);margin:0 auto}
@@ -246,3 +248,20 @@ details.box{border:1px solid var(--line);border-radius:8px}
 .fd-range::-moz-range-progress{height:6px;border-radius:99px;background:var(--blue)}
 .fd-range::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:var(--canvas);border:3px solid var(--blue);box-shadow:0 2px 8px rgb(0 0 0 / .25)}
 .fd-ticks{display:flex;justify-content:space-between;font-size:11px;color:var(--ink3);padding:0 2px}
+/* summary page: one color family per section (blue / green / purple), tuned for each theme.
+   A bar's shade (set in app.js) goes from strong (big share) to pale (small share) inside its own family. */
+:root{--sum-1:#1f6fd1;--sum-2:#2f9e5e;--sum-3:#8a45d0}
+:root[data-theme="dark"]{--sum-1:#68aefc;--sum-2:#69d391;--sum-3:#c08cff}
+:root[data-theme="dracula"]{--sum-1:#8be9fd;--sum-2:#50fa7b;--sum-3:#bd93f9}
+:root[data-theme="cream"]{--sum-1:#3f7cb0;--sum-2:#5f9650;--sum-3:#8a62b0}
+:root[data-theme="ocean"]{--sum-1:#5aa9f0;--sum-2:#6ee0ac;--sum-3:#b48cf2}
+:root[data-theme="forest"]{--sum-1:#7fb7d4;--sum-2:#a8d488;--sum-3:#c3a2e0}
+:root[data-theme="earth"]{--sum-1:#4d7898;--sum-2:#5f7f58;--sum-3:#8a6590}
+:root[data-theme="sunset"]{--sum-1:#3f78b8;--sum-2:#4f9266;--sum-3:#9552ad}
+.sumsec.s1{--c:var(--sum-1)}.sumsec.s2{--c:var(--sum-2)}.sumsec.s3{--c:var(--sum-3)}
+.sumsec h2::before{content:"";display:inline-block;width:10px;height:10px;margin-right:8px;background:var(--c)}
+.sumsec .bar{height:6px;background:var(--sum-track)}
+/* strongest share = the full color; the smallest never drops below --fl % of it, so it stays easy to see */
+.sumsec .bar i{background:var(--c);background:color-mix(in srgb,var(--c) calc((var(--fl) + (100 - var(--fl)) * var(--r)) * 1%),var(--canvas))}
+/* floor of the shade scale and the bar track: the same for every theme, a bright faintest bar and a quiet track */
+:root{--fl:68;--sum-track:var(--hair)}
