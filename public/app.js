@@ -134,8 +134,13 @@ async function load(id,force){
     if(!G||G.id!==id){loadErr=err.status===404?'notfound':'offline';render()}
   }
 }
-setInterval(()=>{if(document.visibilityState==='visible'&&G&&!busy&&!pending)load(G.id)},POLL_MS);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&G)load(G.id)});
+/* poll fast while someone is active, then back off, then stop until they touch the screen again (saves server calls) */
+let lastAct=Date.now(),lastPoll=0;
+const pollEvery=()=>{const idle=Date.now()-lastAct;return idle<60e3?POLL_MS:idle<300e3?15e3:idle<900e3?30e3:Infinity};
+const wake=()=>{const was=Date.now()-lastAct;lastAct=Date.now();if(was>=900e3&&G&&document.visibilityState==='visible'){lastPoll=Date.now();load(G.id)}};
+['pointerdown','keydown','touchstart','scroll'].forEach(e=>addEventListener(e,wake,{passive:true,capture:true}));
+setInterval(()=>{if(document.visibilityState!=='visible'||!G||busy||pending)return;if(Date.now()-lastPoll<pollEvery()-500)return;lastPoll=Date.now();load(G.id)},POLL_MS);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&G){lastPoll=Date.now();load(G.id)}});
 
 /* writes: apply locally right away, then send to the server one batch at a time */
 function localApply(g,ops){
