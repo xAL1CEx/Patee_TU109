@@ -276,3 +276,7 @@ button.av{padding:0;cursor:pointer;font:inherit}
 .wheel-pin{position:absolute;left:50%;top:-6px;width:0;height:0;margin-left:-13px;border-left:13px solid transparent;border-right:13px solid transparent;border-top:26px solid var(--ink);filter:drop-shadow(0 2px 2px rgb(0 0 0 / .3));z-index:1}
 .wheel-res{display:grid;justify-items:center;gap:6px;text-align:center;min-height:0}
 .wheel-res b{font-size:24px;font-weight:600}
+.fd-add{width:100%;height:42px;margin-top:10px;font-size:16px;font-weight:600;transition:background .15s}
+.fd-body .fd-add{margin-top:auto}
+.fd-body .fd-add+.acts{margin-top:8px;padding-top:0}
+.fd-add.on{background:var(--ok);color:var(--on)}

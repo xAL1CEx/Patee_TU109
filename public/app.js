@@ -928,7 +928,8 @@ function foodCard(p,fit,band){
     <div class="fd-body"><div class="fd-lab">${esc(fit?FOOD_TAG[band]:(labels[0]||'ร้านอาหาร'))}</div><h4 class="fd-name">${esc(p.name)}</h4>
      <div class="fd-meta">${esc(fmtHours(p.hours)||'ไม่มีข้อมูลเวลาเปิด')}</div>
      <div class="fd-chips">${chips.map(c=>`<span class="fd-chip">${esc(c)}</span>`).join('')}</div>
-     <div class="acts"><button class="btn sm ${spotOf(p)?'':'line'}" data-addspot="${esc(spotKey(p))}">${spotOf(p)?'แอดแล้ว ✓':'แอด'}</button><a class="btn sm line" href="${esc(maps)}" target="_blank" rel="noopener">Google Maps</a>${p.phone?`<a class="btn sm line" href="tel:${esc(p.phone.replace(/[^\d+]/g,''))}">โทร</a>`:''}${p.web?`<a class="btn sm line" href="${esc(p.web)}" target="_blank" rel="noopener noreferrer">เว็บ</a>`:''}</div></div></article>`;
+     <button class="btn fd-add ${spotOf(p)?'on':''}" data-addspot="${esc(spotKey(p))}">${spotOf(p)?'✓ แอดแล้ว':'+ แอด'}</button>
+     <div class="acts"><a class="btn sm line" href="${esc(maps)}" target="_blank" rel="noopener">Google Maps</a>${p.phone?`<a class="btn sm line" href="tel:${esc(p.phone.replace(/[^\d+]/g,''))}">โทร</a>`:''}${p.web?`<a class="btn sm line" href="${esc(p.web)}" target="_blank" rel="noopener noreferrer">เว็บ</a>`:''}</div></div></article>`;
 }
 // Click-and-drag scrolling for the horizontal rows (touch screens already scroll by swiping, a mouse can't)
 function dragScroll(el){
@@ -971,9 +972,13 @@ function sheetWheel(){
       L.forEach((x,i)=>{
         cx.beginPath();cx.moveTo(0,0);cx.arc(0,0,R,rot+i*a,rot+(i+1)*a);cx.closePath();
         cx.fillStyle=`hsl(${(i*137.5)%360} ${n>1?62:0}% ${i%2?58:66}%)`;cx.fill();cx.lineWidth=3;cx.strokeStyle=canvas;cx.stroke();
-        cx.save();cx.rotate(rot+(i+.5)*a);cx.textAlign='right';cx.fillStyle='#1b1b1b';
-        cx.font=`600 ${n>14?22:28}px "Noto Sans Thai",sans-serif`;
-        const t=x.name.length>14?x.name.slice(0,13)+'…':x.name;cx.fillText(t,R-24,9);cx.restore();
+        const mid=rot+(i+.5)*a,flip=Math.cos(mid)<0;   // names on the left half are turned round so they stay readable
+        cx.save();cx.rotate(flip?mid+Math.PI:mid);cx.textAlign=flip?'right':'left';cx.textBaseline='middle';cx.fillStyle='#1b1b1b';
+        const room=R-54-22;let px=n>14?24:30,t=x.name;
+        cx.font=`600 ${px}px "Noto Sans Thai",sans-serif`;
+        while(cx.measureText(t).width>room&&px>18){px-=2;cx.font=`600 ${px}px "Noto Sans Thai",sans-serif`}
+        while(cx.measureText(t).width>room&&t.length>2)t=t.slice(0,-2)+'…';   // still too long: cut it
+        cx.fillText(t,flip?-54:54,2);cx.restore();
       });
       cx.beginPath();cx.arc(0,0,26,0,7);cx.fillStyle=canvas;cx.fill();cx.lineWidth=4;cx.strokeStyle=ink;cx.stroke();
       cx.restore();
@@ -1002,7 +1007,8 @@ function sheetWheel(){
         const k=Math.min(1,(now-t0)/dur);rot=from+(target-from)*(1-Math.pow(1-k,4));draw();
         if(k<1){anim=requestAnimationFrame(step);return}
         spinning=false;rot%=Math.PI*2;const w=L[win];
-        $q('#wh-res').innerHTML=`<div class="label">วันนี้กิน</div><b>${esc(w.name)}</b>${w.lat!=null?`<a class="btn sm" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(w.name+' '+w.lat+','+w.lng)}" target="_blank" rel="noopener">เปิดแผนที่</a>`:''}`;
+        $q('#wh-res').innerHTML=`<div class="label">วันนี้กิน</div><b>${esc(w.name)}</b><div class="acts" style="justify-content:center;margin:0">${w.lat!=null?`<a class="btn sm" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(w.name+' '+w.lat+','+w.lng)}" target="_blank" rel="noopener">เปิดแผนที่</a>`:''}<button class="btn sm line" id="wh-drop">เอาออก</button></div>`;
+        $q('#wh-drop').onclick=async()=>{$q('#wh-drop').disabled=true;await del('spots',w.id);$q('#wh-res').textContent='';$q('#wh-go').textContent='หมุนเลย';list()};
         $q('#wh-go').textContent='หมุนใหม่';$q('#wh-go').disabled=false;
       };
       anim=requestAnimationFrame(step);
@@ -1088,7 +1094,7 @@ function sheetFood(){
       b.disabled=true;
       const ok=have?await del('spots',have.id):await put('spots',{id:uid(),name:p.name,kind:(p.cuisine.map(c=>FOOD_TH[c]||'')[0])||'',lat:p.lat,lng:p.lng});
       b.disabled=false;if(!sh.isConnected)return;
-      if(ok!==false){const on=!!spotOf(p);b.textContent=on?'แอดแล้ว ✓':'แอด';b.classList.toggle('line',!on);if(on)toast('แอด '+p.name+' เข้าวงล้อแล้ว')}
+      if(ok!==false){const on=!!spotOf(p);b.textContent=on?'✓ แอดแล้ว':'+ แอด';b.classList.toggle('on',on);if(on)toast('แอด '+p.name+' เข้าวงล้อแล้ว')}
       $q('#fd-wn').textContent=spotList().length;
     });
     $q('#fd-again').onclick=run;
