@@ -70,7 +70,7 @@ export async function notify(users, events, send) {
     let doSend = send;
     if (!doSend) {
       const { publicKey, privateKey } = await vapidKeys(users);
-      doSend = (sub, payload) => webpush.sendNotification(sub, payload, { TTL: 86400, vapidDetails: { subject: "mailto:noreply@splitly.invalid", publicKey, privateKey } });
+      doSend = (sub, payload) => webpush.sendNotification(sub, payload, { TTL: 86400, vapidDetails: { subject: process.env.URL || "https://splitly-tu109.netlify.app", publicKey, privateKey } });
     }
     const byUid = new Map();
     for (const e of events) byUid.set(e.uid, [...(byUid.get(e.uid) || []), e]);
@@ -82,6 +82,7 @@ export async function notify(users, events, send) {
           const payload = JSON.stringify({ title: ev.title, body: ev.body, url: "/?g=" + ev.gid, tag: ev.gid });
           await Promise.all(rec.devices.map(d => Promise.resolve().then(() => doSend({ endpoint: d.endpoint, keys: d.keys }, payload)).catch(err => {
             if (err?.statusCode === 404 || err?.statusCode === 410) return removeDevice(users, uid, d.endpoint);
+            console.error("push rejected", err?.statusCode, String(err?.body || err?.message).slice(0, 200));
           })));
         }
       })),
