@@ -8,6 +8,7 @@
     "test": "node test/groups.test.mjs"
   },
   "dependencies": {
-    "@netlify/blobs": "^11.1.5"
+    "@netlify/blobs": "^11.1.5",
+    "web-push": "^4.0.0"
   }
 }

@@ -6,13 +6,15 @@ delete process.env.FOURSQUARE_API_KEY;   // tests must never depend on a real ke
 
 const stores = { groups: memStore(), users: memStore() };
 
+let SEND = null;   // set by the notification test; every phone hands pushes to it
+
 // A tiny "phone": keeps its own session cookie.
 function phone(deps) {
   let cookie = "";
   return async (method, path, body) => {
     const res = await handle(new Request("https://splitly.test" + path, {
       method, headers: { cookie }, body: body ? JSON.stringify(body) : undefined,
-    }), stores, deps);
+    }), stores, { ...deps, send: (...a) => SEND && SEND(...a) });
     const sc = res.headers.get("set-cookie");
     if (sc) cookie = sc.split(";")[0];
     return { status: res.status, body: await res.json(), setCookie: sc };
@@ -473,6 +475,36 @@ await test("searches are limited per person", async () => {
   for (let i = 0; i < 41; i++) last = await busy("GET", "/api/places?lat=14.0717&lng=100.6045");
   assert.equal(last.status, 429);
   assert.equal(last.body.error, "slow_down");
+});
+
+await test("phone notifications: devices subscribe, and only the other people hear about a change", async () => {
+  const sent = [];
+  const send = SEND = async (sub, payload) => { if (sub.endpoint.includes("dead")) throw Object.assign(new Error("gone"), { statusCode: 410 }); sent.push({ to: sub.endpoint, ...JSON.parse(payload) }); };
+  const t2 = ton, p2 = prae;
+  const sub = ep => ({ endpoint: ep, keys: { p256dh: "BPx", auth: "abc" } });
+  assert.equal((await p2("POST", "/api/push/subscribe", { sub: { endpoint: "http://insecure", keys: {} } })).body.error, "bad_subscription");
+  assert.equal((await t2("POST", "/api/push/subscribe", { sub: sub("https://push.test/ton") })).status, 200);
+  assert.equal((await p2("POST", "/api/push/subscribe", { sub: sub("https://push.test/prae") })).status, 200);
+  assert.equal((await p2("POST", "/api/push/subscribe", { sub: sub("https://push.test/dead") })).status, 200);
+  assert.equal((await p2("POST", "/api/push/status", { endpoint: "https://push.test/prae" })).body.on, true);
+  assert.ok((await t2("GET", "/api/push/key")).body.key.length > 40);
+  const made = (await t2("POST", "/api/groups", { meta: { name: "ทริปทดสอบ", kind: "ทริป" } })).body.group, gid = made.id;
+  const view = (await p2("POST", `/api/groups/${gid}/join?t=${made.invite}`, {})).body.group, praeId = view.me;
+  view.me = made.me;
+  const eid = "n" + Math.random().toString(36).slice(2, 10);
+  await t2("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "put", col: "expenses", id: eid, doc: { id: eid, title: "ข้าวเย็น", amount: 200, payer: view.me, split: { [view.me]: 100, [praeId]: 100 } } }] });
+  assert.deepEqual(sent.map(x => x.to), ["https://push.test/prae"]);   // the dead device was dropped, the payer was not told about their own action
+  assert.match(sent[0].body, /ข้าวเย็น/);
+  assert.equal(sent[0].url, "/?g=" + gid);
+  assert.equal((await p2("POST", "/api/push/status", { endpoint: "https://push.test/dead" })).body.on, false);
+  sent.length = 0;
+  await t2("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "put", col: "reminders", id: "rm" + eid, doc: { id: "rm" + eid, trip: gid, from: view.me, to: praeId, amount: 100, createdAt: new Date().toISOString() } }] });
+  assert.match(sent[0].title, /ทวง/);
+  await p2("POST", "/api/push/unsubscribe", { endpoint: "https://push.test/prae" });
+  sent.length = 0;
+  await t2("DELETE", `/api/groups/${gid}`);   // refused while debts are open; nothing should be sent either way
+  assert.equal(sent.length, 0);
+  SEND = null;
 });
 
 await test("logout clears the cookie", async () => {

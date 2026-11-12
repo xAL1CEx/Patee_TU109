@@ -678,12 +678,42 @@ function sheetMembers(){
    });
 }
 
+/* turn phone notifications on or off for this device (needs the app on the home screen on iPhone) */
+async function pushBox(box){
+  if(!box)return;
+  const ios=/iphone|ipad/i.test(navigator.userAgent),standalone=navigator.standalone||matchMedia('(display-mode: standalone)').matches;
+  const head='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><b>แจ้งเตือนบนเครื่องนี้</b><div class="muted">เด้งเมื่อมีรายการใหม่ ถูกทวง หรือมีคนโอนให้</div></div>';
+  if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)){
+    box.innerHTML=head+'</div>'+(ios&&!standalone?'<p class="note" style="margin:0">บน iPhone ต้องเพิ่ม Splitly ลงหน้าจอโฮมก่อน (ปุ่มแชร์ > เพิ่มไปยังหน้าจอโฮม) แล้วเปิดจากไอคอนนั้น ถึงจะเปิดแจ้งเตือนได้ (iOS 16.4 ขึ้นไป)</p>':'<p class="note" style="margin:0">เบราว์เซอร์นี้ยังไม่รองรับการแจ้งเตือน</p>');return}
+  let reg=null,sub=null,on=false;
+  try{reg=await navigator.serviceWorker.ready;sub=await reg.pushManager.getSubscription();
+    if(sub&&Notification.permission==='granted')on=(await api('/push/status',{method:'POST',body:JSON.stringify({endpoint:sub.endpoint})})).on}catch(e){}
+  const denied=Notification.permission==='denied';
+  box.innerHTML=head+`<button class="btn sm ${on?'line':''}" id="pn-t" ${denied?'disabled':''}>${on?'ปิด':'เปิด'}</button></div>`+(denied?'<p class="note" style="margin:0">เครื่องนี้บล็อกการแจ้งเตือนไว้ ไปเปิดที่การตั้งค่าของเบราว์เซอร์หรือแอปก่อน</p>':'');
+  const t=box.querySelector('#pn-t');if(!t)return;
+  t.onclick=async()=>{
+    t.disabled=true;
+    try{
+      if(on){if(sub){await api('/push/unsubscribe',{method:'POST',body:JSON.stringify({endpoint:sub.endpoint})});await sub.unsubscribe()}toast('ปิดแจ้งเตือนแล้ว')}
+      else{
+        if(await Notification.requestPermission()!=='granted'){toast('ไม่ได้รับอนุญาตให้แจ้งเตือน');return pushBox(box)}
+        const {key}=await api('/push/key');
+        const raw=atob(key.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-key.length%4)%4));
+        sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:Uint8Array.from(raw,c=>c.charCodeAt(0))});
+        await api('/push/subscribe',{method:'POST',body:JSON.stringify({sub:sub.toJSON()})});toast('เปิดแจ้งเตือนแล้ว');
+      }
+    }catch(e){toast('ตั้งค่าแจ้งเตือนไม่สำเร็จ ลองใหม่อีกครั้ง')}
+    pushBox(box);
+  };
+}
+
 function sheetPerson(id){
   const isMe=!id||id===me, p=isMe?profile:D.people[id];
   // Codex: place appearance controls directly after profile/payment fields so the setting is easy to find.
   openSheet(isMe?'บัญชีของคุณ':'ข้อมูลของ '+p.name,`${isMe?`<div class="kv"><span class="av lg me">${esc(profile.name[0])}</span><div class="grow"><div class="label">ชื่อผู้ใช้</div><b>@${esc(user.username)}</b></div></div>`:''}
    ${personFields(p,'pf',isMe)}
    ${isMe?themePicker():''}
+   ${isMe?'<div class="box" id="pn-box" style="padding:12px 14px;display:grid;gap:8px"></div>':''}
    ${isMe?'<p class="muted" style="margin:0">ใช้กับบัญชีของคุณทุกเครื่อง และอัปเดตให้กลุ่มที่กำลังดูอยู่</p>':''}
    <button class="btn block" id="pf-save">บันทึก</button>
    ${isMe?`<hr class="sep"><details class="box" style="padding:12px 14px"><summary style="cursor:pointer;font-weight:600">เปลี่ยนรหัสผ่าน</summary><form id="pw-form" style="display:grid;gap:10px;margin-top:12px" novalidate>
@@ -692,6 +722,7 @@ function sheetPerson(id){
      <label class="f">รหัสผ่านใหม่ (อย่างน้อย 8 ตัว)<input class="inp" type="password" id="pw-new" autocomplete="new-password"></label>
      <button class="btn line" type="submit">เปลี่ยนรหัสผ่าน</button><p class="note" style="margin:0">เครื่องอื่นที่ล็อกอินอยู่จะถูกออกจากระบบ</p></form></details>
      <button class="btn danger block" id="pf-out">ออกจากระบบ</button>`:''}`,sh=>{
+    if(isMe)pushBox(sh.querySelector('#pn-box'));
     const out=sh.querySelector('#pf-out');
     if(out)out.onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}catch(e){}signedOut();toast('ออกจากระบบแล้ว')};
     const pw=sh.querySelector('#pw-form');
@@ -1148,6 +1179,14 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSheet()});
     authed=false;render();toast('เชื่อมต่อไม่ได้ ตรวจอินเทอร์เน็ตแล้วรีเฟรช');return;
   }
   if(pending){startJoin({id:pending.id,token:pending.token});return}
-  const first=entry(curId)?curId:groups[0]?.id;
+  const want=new URLSearchParams(location.search).get('g');
+  if(want){history.replaceState(null,'','/')}
+  const first=entry(want)?want:entry(curId)?curId:groups[0]?.id;
   if(first)load(first);else render();
 })();
+
+/* phone notifications: the service worker shows them; a tap on one while the app is open switches to that group */
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  navigator.serviceWorker.addEventListener('message',e=>{const g=e.data&&e.data.openGroup;if(g&&entry(g)){tab='home';load(g,true)}});
+}

@@ -15,9 +15,12 @@
 //   POST   /api/groups/:id/join?t=INVITE {claim?}  join, or take over a friend entry
 //   POST   /api/groups/:id/leave            remove from my list
 //   DELETE /api/groups/:id                  delete (group creator only)
+// Notifications (signed in)
+//   GET  /api/push/key  ·  POST /api/push/subscribe {sub}  ·  POST /api/push/status|unsubscribe {endpoint}
 import { getStore } from "@netlify/blobs";
 import { newGroup, applyOps, joinGroup, memberOf, amountOwed, hasOpenDebts, viewFor, previewOf, validGroupId, rid, HttpError } from "../lib/groups.mjs";
 import { searchPlaces, findPlace, limitPerUser } from "../lib/places.mjs";
+import { vapidKeys, cleanSubscription, saveDevice, removeDevice, hasDevice, eventsOf, notify } from "../lib/push.mjs";
 import { hashPassword, verifyPassword, signSession, readSession, cleanUsername, checkPassword, cleanProfile, newSecret, readCookie, sessionCookie, SESSION_DAYS } from "../lib/auth.mjs";
 
 const COOKIE = "sp_session";
@@ -161,6 +164,20 @@ export async function handle(req, stores, deps = {}) {
       return json({ error: "method_not_allowed" }, 405);
     }
 
+    /* ---------- phone notifications (Web Push) ---------- */
+    if (seg[1] === "push") {
+      if (seg[2] === "key" && M === "GET") return json({ key: (await vapidKeys(users)).publicKey });
+      if (seg[2] === "subscribe" && M === "POST") {
+        const sub = cleanSubscription((await readBody(req)).sub);
+        if (!sub) throw new HttpError(400, "bad_subscription");
+        await saveDevice(users, me.id, sub);
+        return json({ ok: true });
+      }
+      if (seg[2] === "status" && M === "POST") return json({ on: await hasDevice(users, me.id, (await readBody(req)).endpoint) });
+      if (seg[2] === "unsubscribe" && M === "POST") { await removeDevice(users, me.id, (await readBody(req)).endpoint); return json({ ok: true }); }
+      return json({ error: "not_found" }, 404);
+    }
+
     /* ---------- where to eat (OpenStreetMap data) ---------- */
     if ((seg[1] === "places" || seg[1] === "geocode") && seg.length === 2) {
       if (M !== "GET") return json({ error: "method_not_allowed" }, 405);
@@ -199,11 +216,14 @@ export async function handle(req, stores, deps = {}) {
 
     if (action === "ops" && M === "POST") {
       const { ops } = await readBody(req);
+      let before = null;
       const g = await mutate(groups, id, g => {
         if (!memberOf(g, me.id)) throw new HttpError(404, "not_found");
+        before = structuredClone(g);   // taken again on every retry, so it always matches what was written
         applyOps(g, ops, me.id);
         return g;
       });
+      await notify(users, eventsOf(before, g, me.id), deps.send);
       return json({ group: viewFor(g, me.id) });
     }
 
