@@ -494,17 +494,57 @@ await test("phone notifications: devices subscribe, and only the other people he
   const eid = "n" + Math.random().toString(36).slice(2, 10);
   await t2("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "put", col: "expenses", id: eid, doc: { id: eid, title: "ข้าวเย็น", amount: 200, payer: view.me, split: { [view.me]: 100, [praeId]: 100 } } }] });
   assert.deepEqual(sent.map(x => x.to), ["https://push.test/prae"]);   // the dead device was dropped, the payer was not told about their own action
-  assert.match(sent[0].body, /ข้าวเย็น/);
+  assert.match(sent[0].body, /^ต้น\nเพิ่มรายการ ข้าวเย็น/);
   assert.equal(sent[0].url, "/?g=" + gid);
   assert.equal((await p2("POST", "/api/push/status", { endpoint: "https://push.test/dead" })).body.on, false);
   sent.length = 0;
   await t2("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "put", col: "reminders", id: "rm" + eid, doc: { id: "rm" + eid, trip: gid, from: view.me, to: praeId, amount: 100, createdAt: new Date().toISOString() } }] });
-  assert.match(sent[0].title, /ทวง/);
+  assert.equal(sent[0].title, "ทริปทดสอบ");
+  assert.match(sent[0].body, /^ต้น\nทวงเงิน/);
   await p2("POST", "/api/push/unsubscribe", { endpoint: "https://push.test/prae" });
   sent.length = 0;
   await t2("DELETE", `/api/groups/${gid}`);   // refused while debts are open; nothing should be sent either way
   assert.equal(sent.length, 0);
   SEND = null;
+});
+
+await test("sign-up through an invite may leave the payment details for later; otherwise they are still required", async () => {
+  const late = phone();
+  assert.equal((await late("POST", "/api/auth/register", { username: "late1", password: "secret123", profile: { name: "ใหม่" } })).body.error, "bad_bank");
+  const r = await late("POST", "/api/auth/register", { username: "late1", password: "secret123", profile: { name: "ใหม่", later: true } });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.user.profile.pp, "");
+  assert.equal((await late("POST", "/api/auth/register", { username: "late2", password: "secret123", profile: { name: "ใหม่", later: true, pp: "123" } })).body.error, "bad_promptpay");   // a half-filled field is still checked
+});
+
+await test("profile photo: a small jpeg is kept and shared with the group; anything else is dropped", async () => {
+  const img = "data:image/jpeg;base64," + "A".repeat(3000);
+  const me0 = (await ton("GET", "/api/me")).body.user.profile;
+  assert.equal((await ton("PUT", "/api/me", { profile: { ...me0, img } })).body.user.profile.img, img);
+  assert.equal((await ton("PUT", "/api/me", { profile: { ...me0, img: "data:text/html;base64,AAAA" } })).body.user.profile.img, undefined);
+  assert.equal((await ton("PUT", "/api/me", { profile: { ...me0, img: "data:image/jpeg;base64," + "A".repeat(9000) } })).body.user.profile.img, undefined);
+  const g = (await ton("POST", "/api/groups", { meta: { name: "รูป", kind: "ทริป" } })).body.group;
+  await ton("POST", `/api/groups/${g.id}/ops`, { ops: [{ op: "put", col: "members", id: g.me, doc: { ...g.members[g.me], img } }] });
+  assert.equal((await prae("POST", `/api/groups/${g.id}/join?t=${g.invite}`, {})).body.group.members[g.me].img, img);
+  await ton("POST", `/api/groups/${g.id}/ops`, { ops: [{ op: "put", col: "members", id: g.me, doc: { ...g.members[g.me], img: "javascript:alert(1)" } }] });
+  assert.equal((await ton("GET", `/api/groups/${g.id}`)).body.group.members[g.me].img, undefined);
+});
+
+await test("restaurant wheel list: any member adds and removes places, names are cleaned, there is a cap", async () => {
+  const g = (await ton("POST", "/api/groups", { meta: { name: "วงล้อ", kind: "ทริป" } })).body.group;
+  await prae("POST", `/api/groups/${g.id}/join?t=${g.invite}`, {});
+  const put = (who, id, doc) => who("POST", `/api/groups/${g.id}/ops`, { ops: [{ op: "put", col: "spots", id, doc }] });
+  assert.equal((await put(ton, "s1", { name: "  ร้านลุงหนวด  ", kind: "ก๋วยเตี๋ยว", lat: 14.07, lng: 100.6, evil: "x" })).status, 200);
+  assert.equal((await put(prae, "s2", { name: "ส้มตำเจ๊แดง" })).status, 200);
+  const v = (await ton("GET", `/api/groups/${g.id}`)).body.group;
+  assert.equal(v.spots.s1.name, "ร้านลุงหนวด");
+  assert.equal(v.spots.s1.evil, undefined);
+  assert.equal(v.spots.s2.lat, null);
+  assert.equal((await put(ton, "s3", { name: "  " })).body.error, "bad_spot");
+  assert.equal((await prae("POST", `/api/groups/${g.id}/ops`, { ops: [{ op: "del", col: "spots", id: "s1" }] })).status, 200);
+  for (let i = 0; i < 40; i++) await put(ton, "x" + i, { name: "ร้าน " + i });
+  assert.equal((await put(ton, "overflow", { name: "เกิน" })).body.error, "too_many_spots");
+  assert.equal((await stranger("POST", `/api/groups/${g.id}/ops`, { ops: [{ op: "del", col: "spots", id: "s2" }] })).status, 404);
 });
 
 await test("logout clears the cookie", async () => {

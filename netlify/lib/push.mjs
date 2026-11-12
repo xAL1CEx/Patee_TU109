@@ -45,19 +45,20 @@ export function eventsOf(before, after, actorUid) {
   const out = [], mem = after.members || {};
   const name = id => mem[id]?.name || "เพื่อน";
   const uidOf = id => mem[id]?.uid;
-  const add = (id, title, body) => { const uid = uidOf(id); if (uid && uid !== actorUid) out.push({ uid, title, body, gid: after.id }); };
+  // The notification reads: group name on top, who did it, then what happened.
+  const add = (id, who, msg) => { const uid = uidOf(id); if (uid && uid !== actorUid) out.push({ uid, title: after.name, body: `${name(who)}\n${msg}`, gid: after.id }); };
 
   for (const [id, e] of Object.entries(after.expenses || {})) {
     if (before.expenses?.[id]) continue;
-    for (const [k, v] of Object.entries(e.split || {})) if (k !== e.payer) add(k, `${after.name}: ${name(e.payer)} เพิ่มรายการ`, `${e.title} · ส่วนของคุณ ${baht(v)}`);
+    for (const [k, v] of Object.entries(e.split || {})) if (k !== e.payer) add(k, e.payer, `เพิ่มรายการ ${e.title} · ส่วนของคุณ ${baht(v)}`);
   }
   for (const [id, p] of Object.entries(after.payments || {})) {
     const was = before.payments?.[id];
-    if (!was && !p.confirmed) add(p.to, `${after.name}: ${name(p.from)} โอนเงินให้คุณ`, `${baht(p.amount)} · เปิดแอปเพื่อกดยืนยันว่าได้รับแล้ว`);
-    else if ((!was && p.confirmed) || (was && !was.confirmed && p.confirmed)) add(p.from, `${after.name}: ${name(p.to)} ยืนยันการรับเงิน`, `${baht(p.amount)} หักจากยอดค้างของคุณแล้ว`);
+    if (!was && !p.confirmed) add(p.to, p.from, `โอนเงินให้คุณ ${baht(p.amount)} · กดยืนยันว่าได้รับแล้ว`);
+    else if ((!was && p.confirmed) || (was && !was.confirmed && p.confirmed)) add(p.from, p.to, `ยืนยันการรับเงินแล้ว ${baht(p.amount)} · หักจากยอดค้างของคุณแล้ว`);
   }
   for (const [id, r] of Object.entries(after.reminders || {})) {
-    if (!before.reminders?.[id]) add(r.to, `${after.name}: ${name(r.from)} ทวงเงิน`, `ยอดที่ค้างอยู่ ${baht(r.amount)}`);
+    if (!before.reminders?.[id]) add(r.to, r.from, `ทวงเงิน ${baht(r.amount)} ที่ยังค้างอยู่`);
   }
   return out;
 }

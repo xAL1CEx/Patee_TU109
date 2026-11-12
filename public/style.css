@@ -265,3 +265,14 @@ details.box{border:1px solid var(--line);border-radius:8px}
 .sumsec .bar i{background:var(--c);background:color-mix(in srgb,var(--c) calc((var(--fl) + (100 - var(--fl)) * var(--r)) * 1%),var(--canvas))}
 /* floor of the shade scale and the bar track: the same for every theme, a bright faintest bar and a quiet track */
 :root{--fl:68;--sum-track:var(--hair)}
+/* profile photo */
+.av{overflow:hidden}
+.av img{width:100%;height:100%;object-fit:cover;display:block}
+button.av{padding:0;cursor:pointer;font:inherit}
+.av.xl{width:64px;height:64px;font-size:24px;border:1px solid var(--line)}
+/* restaurant wheel */
+.wheel-wrap{position:relative;width:min(100%,320px);margin:0 auto}
+.wheel-wrap canvas{width:100%;height:auto;display:block;border-radius:50%;box-shadow:0 4px 18px rgb(0 0 0 / .18)}
+.wheel-pin{position:absolute;left:50%;top:-6px;width:0;height:0;margin-left:-13px;border-left:13px solid transparent;border-right:13px solid transparent;border-top:26px solid var(--ink);filter:drop-shadow(0 2px 2px rgb(0 0 0 / .3));z-index:1}
+.wheel-res{display:grid;justify-items:center;gap:6px;text-align:center;min-height:0}
+.wheel-res b{font-size:24px;font-weight:600}

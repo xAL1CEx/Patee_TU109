@@ -1,9 +1,10 @@
 // Group storage rules shared by the API function. Pure logic, no Netlify imports, so it can be tested with plain Node.
 import { randomBytes } from "node:crypto";
 
-export const COLS = ["members", "expenses", "payments", "plans", "reminders"];
+export const COLS = ["members", "expenses", "payments", "plans", "reminders", "spots"];
+const MAX_SPOTS = 40;              // restaurants saved for the wheel
 const KINDS = ["ทริป", "กลุ่ม", "กิจกรรม"];
-const MAX_DOC = 8 * 1024;          // one expense / member / payment
+const MAX_DOC = 12 * 1024;         // one expense / member / payment (a member carries a small profile photo)
 const MAX_GROUP = 1024 * 1024;     // whole group blob
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 
@@ -20,6 +21,10 @@ export function rid(n) {
 }
 
 const str = (v, max) => String(v ?? "").trim().slice(0, max);
+
+// A small square profile photo, already shrunk by the app (about 4 KB). Anything else is dropped.
+const PHOTO_RE = /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/;
+export const cleanPhoto = v => (typeof v === "string" && v.length <= 7000 && PHOTO_RE.test(v) ? v : "");
 
 function cleanMeta(meta = {}) {
   const out = {};
@@ -59,7 +64,7 @@ export function newGroup(meta, profile, uid) {
     ...m,
     owner: mid,
     members: { [mid]: cleanDoc({ ...profile, uid, claimed: true, joinedAt: now }, mid) },
-    expenses: {}, payments: {}, plans: {}, reminders: {},
+    expenses: {}, payments: {}, plans: {}, reminders: {}, spots: {},
   };
 }
 
@@ -146,6 +151,16 @@ function cleanPayment(g, doc, mine) {
   return { ...doc, amount, by: mine, confirmed: mine === doc.to || !g.members[doc.to].uid };
 }
 
+// A restaurant someone added for the group wheel: just a name, a place to open on the map and who added it.
+function cleanSpot(g, doc, cur, mine) {
+  if (!doc || typeof doc !== "object") throw new HttpError(400, "bad_doc");
+  const name = str(doc.name, 80);
+  if (!name) throw new HttpError(400, "bad_spot");
+  if (!cur && Object.keys(g.spots || {}).length >= MAX_SPOTS) throw new HttpError(409, "too_many_spots");
+  const num = v => (Number.isFinite(Number(v)) && v !== null && v !== "" ? Math.round(Number(v) * 1e5) / 1e5 : null);
+  return { id: doc.id, name, kind: str(doc.kind, 30), lat: num(doc.lat), lng: num(doc.lng), by: cur?.by || mine, createdAt: cur?.createdAt || new Date().toISOString() };
+}
+
 // Who may change something that sits between two people (a transfer, a plan, a reminder).
 function checkPairDoc(col, op, cur, doc, mine) {
   if (col === "payments") {
@@ -182,10 +197,12 @@ export function applyOps(g, ops, uid) {
     if (op.op === "put") {
       let doc = op.doc;
       if (op.col === "members") {
-        const { uid: _u, claimed: _c, ...rest } = doc || {};
+        const { uid: _u, claimed: _c, img: _i, ...rest } = doc || {};
+        if (cleanPhoto(doc?.img)) rest.img = cleanPhoto(doc.img);
         doc = { ...rest, ...(cur?.uid ? { uid: cur.uid } : {}), claimed: !!cur?.uid, joinedAt: cur?.joinedAt || rest.joinedAt || new Date().toISOString() };
       }
       if (op.col === "expenses") doc = cleanExpense(g, doc, cur, mine);
+      if (op.col === "spots") doc = cleanSpot(g, doc, cur, mine);
       if (op.col === "payments") doc = cur ? { ...cur, confirmed: true, confirmedAt: new Date().toISOString() } : cleanPayment(g, doc, mine);
       g[op.col][op.id] = cleanDoc(doc, op.id);
     } else if (op.op === "del") {

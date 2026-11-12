@@ -6,6 +6,8 @@ const I={
   ticket:'<path d="M4 10a2 2 0 0 0 0 4v4h16v-4a2 2 0 0 1 0-4V6H4z"/><path d="M14 8v8" stroke-dasharray="2 2"/>',
   bag:'<path d="M5 8h14l-1 12H6zM9 8V6a3 3 0 0 1 6 0v2"/>',
   other:'<circle cx="6" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18" cy="12" r="1"/>',
+  shuffle:'<circle cx="12" cy="12" r="9"/><path d="M12 3v9l6 4M12 12L6 16"/>',
+  pin:'<path d="M12 21s7-6 7-11a7 7 0 0 0-14 0c0 5 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/>',
   home:'<path d="M4 11l8-7 8 7v9H4z"/><path d="M10 20v-5h4v5"/>',
   list:'<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
   plus:'<path d="M12 5v14M5 12h14"/>',
@@ -94,7 +96,7 @@ function setUser(u,list){user=u;profile=u?u.profile:null;authed=!!u;if(list)grou
 
 /* ================= group state (from server) ================= */
 let G=null, me=null, loading=false, loadErr=null, offline=false, pending=null, busy=0;
-let D={people:{},trips:{},expenses:{},payments:{},plans:{},reminders:{}};
+let D={people:{},trips:{},expenses:{},payments:{},plans:{},reminders:{},spots:{}};
 
 function adopt(g){
   G=g; curId=g.id; LS.set('sp-cur',curId); me=g.me;
@@ -102,7 +104,7 @@ function adopt(g){
   const mem=g.members||{};
   const order=Object.keys(mem).sort((a,b)=>(mem[a].joinedAt||'').localeCompare(mem[b].joinedAt||''));
   D={people:mem,trips:{[g.id]:{id:g.id,name:g.name,kind:g.kind,dates:g.dates,start:g.start||'',end:g.end||'',members:order,activities:g.activities||[],createdAt:g.createdAt}},
-     expenses:g.expenses||{},payments:g.payments||{},plans:g.plans||{},reminders:g.reminders||{}};
+     expenses:g.expenses||{},payments:g.payments||{},plans:g.plans||{},reminders:g.reminders||{},spots:g.spots||{}};
   scheduleRender();
 }
 
@@ -168,7 +170,7 @@ function send(ops){
   }).finally(()=>busy--);
   chain=p;return p;
 }
-const COLMAP={people:'members',expenses:'expenses',payments:'payments',plans:'plans',reminders:'reminders'};
+const COLMAP={people:'members',expenses:'expenses',payments:'payments',plans:'plans',reminders:'reminders',spots:'spots'};
 function put(col,obj){
   const {id,...doc}=obj;
   if(col==='trips')return send([{op:'meta',doc:{name:doc.name,kind:doc.kind,dates:doc.dates,start:doc.start,end:doc.end,activities:doc.activities}}]);
@@ -178,7 +180,8 @@ function del(col,id){return send([{op:'del',col:COLMAP[col],id}])}
 
 /* ================= derived ================= */
 const P=id=>D.people[id]||{name:'?',bank:'',acct:'',pp:''};
-const av=(id,cls='')=>`<span class="av ${id===me?'me':''} ${cls}">${esc((P(id).name||'?')[0])}</span>`;
+const avInner=p=>p.img?`<img alt="" src="${esc(p.img)}">`:esc((p.name||'?')[0]);
+const av=(id,cls='')=>`<span class="av ${id===me?'me':''} ${cls}">${avInner(P(id))}</span>`;
 const nm=id=>id===me?'คุณ':P(id).name;
 const trip=()=>G?D.trips[G.id]:null;
 const texp=t=>Object.values(D.expenses).filter(e=>e.trip===t.id).sort((a,b)=>((a.date||'')+(a.createdAt||'')).localeCompare((b.date||'')+(b.createdAt||'')));
@@ -263,6 +266,7 @@ async function startJoin(j){
     const r=await api(`/groups/${j.id}/preview?t=${encodeURIComponent(j.token)}`);
     if(r.joined){pending=null;history.replaceState(null,'','/');groups.push({id:j.id,name:r.preview.name,kind:r.preview.kind});G=null;await load(j.id);return}
     pending.group=r.preview;
+    if(!Object.values(r.preview.members||{}).some(m=>!m.claimed)){await finishJoin(null);return}   // nobody to pick: go straight in
   }catch(err){if(err.status===401)return;pending.err=err.status===404?'ลิงก์เชิญนี้ใช้ไม่ได้ หรือกลุ่มถูกลบไปแล้ว':'เชื่อมต่อไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองใหม่'}
   render();
 }
@@ -285,7 +289,7 @@ function render(){
   $('#tabsWrap').hidden=!t;
   $('#tripPick').hidden=!profile||!!pending||!groups.length;
   $('#meBtn').hidden=!profile||!!pending;
-  if(profile){$('#meBtn').innerHTML=`<span class="av lg me">${esc(profile.name[0])}</span>`}
+  if(profile){$('#meBtn').innerHTML=`<span class="av lg me">${avInner(profile)}</span>`}
   $('#tripPick').innerHTML=`<span>${G?esc(G.name):'เลือกกลุ่ม'}</span>${ic('down',14)}`;
   let top=offline?`<div class="modebar">ออฟไลน์อยู่ ข้อมูลอาจไม่อัปเดต</div>`:'';
   if(authed===null){v.innerHTML=`<div class="empty" style="background:none;padding-top:60px"><div class="spin"></div>กำลังเปิด Splitly…</div>`;return}
@@ -349,7 +353,7 @@ function vAuth(){
       <label class="f">ชื่อผู้ใช้<input class="inp" id="au-user" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="20" placeholder="${reg?'a-z, 0-9, _ หรือ . (3–20 ตัว)':''}"></label>
       <label class="f">รหัสผ่าน<input class="inp" id="au-pass" type="password" autocomplete="${reg?'new-password':'current-password'}" maxlength="200" placeholder="${reg?'อย่างน้อย 8 ตัวอักษร':''}"></label>
       ${reg?`<label class="f">ยืนยันรหัสผ่าน<input class="inp" id="au-pass2" type="password" autocomplete="new-password" maxlength="200"></label>
-        <hr class="sep"><h2>โปรไฟล์ของคุณ</h2><p class="muted" style="margin:0">เพื่อนในกลุ่มจะเห็นชื่อเล่น และช่องทางรับเงินนี้ไว้โอนคืนคุณ</p>${personFields({})}`:''}
+        <hr class="sep"><h2>โปรไฟล์ของคุณ</h2><p class="muted" style="margin:0">${pending?'ใส่แค่ชื่อเล่นก็เข้ากลุ่มได้ ช่องทางรับเงินมาใส่ทีหลังได้':'เพื่อนในกลุ่มจะเห็นชื่อเล่น และช่องทางรับเงินนี้ไว้โอนคืนคุณ'}</p>${personFields({},'pf',!pending)}`:''}
       <button class="btn block" type="submit" id="au-go">${reg?'สมัครและเริ่มใช้งาน':'เข้าสู่ระบบ'}</button>
     </form>
     ${themePicker()}
@@ -365,7 +369,7 @@ async function submitAuth(form){
   if(reg){
     if(password.length<8){toast(AUTH_ERR.bad_password);return}
     if(password!==form.querySelector('#au-pass2').value){toast('รหัสผ่านสองช่องไม่ตรงกัน');return}
-    const p=readPerson(form);if(!p)return;body.profile=p;
+    const p=readPerson(form,'pf',!pending);if(!p)return;if(pending&&!p.pp&&!p.acct)p.later=true;body.profile=p;
   }
   btn.disabled=true;
   try{
@@ -422,11 +426,12 @@ function alerts(t){
   return out.join('');
 }
 
+const needPay=()=>profile&&!profile.pp&&!profile.acct;
 function vHome(t){
   const ex=texp(t),total=ex.reduce((a,e)=>a+e.amount,0),net=balances(t);
   const myShare=ex.reduce((a,e)=>a+(e.split?.[me]||0),0),myPaid=ex.filter(e=>e.payer===me).reduce((a,e)=>a+e.amount,0);
   const alone=t.members.length<2;
-  return `
+  return `${needPay()?`<div class="alert">${ic('wallet',20)}<div class="grow"><b>ยังไม่ได้ใส่ช่องทางรับเงิน</b><div class="muted">เพื่อนจะโอนคืนคุณไม่ได้จนกว่าจะใส่</div></div><button class="btn sm" data-do="myPay">ใส่เลย</button></div>`:''}
   <section class="hero">
     <div style="display:grid;gap:4px;justify-items:center"><div class="tier">${esc(t.kind)}${t.dates?' · '+esc(t.dates):''}</div><h1>${esc(t.name)}</h1></div>
     <div class="hero-row"><div class="label">ค่าใช้จ่ายทั้งหมด</div><div class="big num">${baht(total)}</div>
@@ -678,6 +683,22 @@ function sheetMembers(){
    });
 }
 
+/* a profile photo is shrunk to a small square on the phone (about 4 KB) so it can travel with every group */
+async function shrinkPhoto(file){
+  const url=URL.createObjectURL(file);
+  try{
+    const im=await new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=no;i.src=url});
+    const side=Math.min(im.naturalWidth,im.naturalHeight);if(!side)throw new Error('empty');
+    for(const [px,q] of [[112,.72],[96,.6],[80,.5],[64,.45]]){
+      const c=document.createElement('canvas');c.width=c.height=px;
+      c.getContext('2d').drawImage(im,(im.naturalWidth-side)/2,(im.naturalHeight-side)/2,side,side,0,0,px,px);
+      const out=c.toDataURL('image/jpeg',q);
+      if(out.length<=6500)return out;
+    }
+    throw new Error('too big');
+  }finally{URL.revokeObjectURL(url)}
+}
+
 /* turn phone notifications on or off for this device (needs the app on the home screen on iPhone) */
 async function pushBox(box){
   if(!box)return;
@@ -710,7 +731,7 @@ async function pushBox(box){
 function sheetPerson(id){
   const isMe=!id||id===me, p=isMe?profile:D.people[id];
   // Codex: place appearance controls directly after profile/payment fields so the setting is easy to find.
-  openSheet(isMe?'บัญชีของคุณ':'ข้อมูลของ '+p.name,`${isMe?`<div class="kv"><span class="av lg me">${esc(profile.name[0])}</span><div class="grow"><div class="label">ชื่อผู้ใช้</div><b>@${esc(user.username)}</b></div></div>`:''}
+  openSheet(isMe?'บัญชีของคุณ':'ข้อมูลของ '+p.name,`${isMe?`<div class="kv"><button type="button" class="av xl me" id="pf-photo" aria-label="เปลี่ยนรูปโปรไฟล์">${avInner(profile)}</button><div class="grow"><div class="label">ชื่อผู้ใช้</div><b>@${esc(user.username)}</b><div style="display:flex;gap:12px"><button type="button" class="link" id="pf-pick">เปลี่ยนรูป</button><button type="button" class="link" id="pf-unpick" ${profile.img?'':'hidden'}>ลบรูป</button></div></div><input type="file" id="pf-file" accept="image/*" hidden></div>`:''}
    ${personFields(p,'pf',isMe)}
    ${isMe?themePicker():''}
    ${isMe?'<div class="box" id="pn-box" style="padding:12px 14px;display:grid;gap:8px"></div>':''}
@@ -723,6 +744,15 @@ function sheetPerson(id){
      <button class="btn line" type="submit">เปลี่ยนรหัสผ่าน</button><p class="note" style="margin:0">เครื่องอื่นที่ล็อกอินอยู่จะถูกออกจากระบบ</p></form></details>
      <button class="btn danger block" id="pf-out">ออกจากระบบ</button>`:''}`,sh=>{
     if(isMe)pushBox(sh.querySelector('#pn-box'));
+    let img=isMe?(profile.img||''):'';
+    if(isMe){
+      const file=sh.querySelector('#pf-file'),ph=sh.querySelector('#pf-photo'),un=sh.querySelector('#pf-unpick');
+      const paint=()=>{ph.innerHTML=avInner({name:profile.name,img});un.hidden=!img};
+      sh.querySelector('#pf-pick').onclick=ph.onclick=()=>file.click();
+      un.onclick=()=>{img='';paint()};
+      file.onchange=async()=>{const f=file.files[0];file.value='';if(!f)return;
+        try{img=await shrinkPhoto(f);paint()}catch(e){toast('ใช้รูปนี้ไม่ได้ ลองรูปอื่น')}};
+    }
     const out=sh.querySelector('#pf-out');
     if(out)out.onclick=async()=>{try{await api('/auth/logout',{method:'POST'})}catch(e){}signedOut();toast('ออกจากระบบแล้ว')};
     const pw=sh.querySelector('#pw-form');
@@ -732,6 +762,7 @@ function sheetPerson(id){
       catch(err){toast(err.code==='wrong_password'?'รหัสผ่านปัจจุบันไม่ถูกต้อง':AUTH_ERR[err.code]||'เปลี่ยนไม่สำเร็จ')}};
     sh.querySelector('#pf-save').onclick=async()=>{
       const v=readPerson(sh,'pf',isMe);if(!v)return;
+      if(isMe)v.img=img;
       if(isMe){try{const r=await api('/me',{method:'PUT',body:JSON.stringify({profile:v})});setUser(r.user)}catch(err){toast(AUTH_ERR[err.code]||'บันทึกไม่สำเร็จ');return}
         if(G&&G.members[me])await put('people',{...G.members[me],...v,id:me});render()}
       else await put('people',{...D.people[id],...v,id});
@@ -885,6 +916,9 @@ function foodScore(p,size){
   s-=Math.min(2.5,p.dist/2000);      // nearer is better
   return {s,fit};
 }
+const spotKey=p=>p.name+'|'+p.lat+'|'+p.lng;
+const spotOf=p=>Object.values(D.spots).find(x=>x.name.toLowerCase()===String(p.name).toLowerCase());
+const spotList=()=>Object.values(D.spots).sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
 function foodCard(p,fit,band){
   const [,emo,c1,c2]=foodLook(p);
   const labels=[...new Set(p.cuisine.map(c=>FOOD_TH[c]||c.replace(/_/g,' ')))];
@@ -894,7 +928,7 @@ function foodCard(p,fit,band){
     <div class="fd-body"><div class="fd-lab">${esc(fit?FOOD_TAG[band]:(labels[0]||'ร้านอาหาร'))}</div><h4 class="fd-name">${esc(p.name)}</h4>
      <div class="fd-meta">${esc(fmtHours(p.hours)||'ไม่มีข้อมูลเวลาเปิด')}</div>
      <div class="fd-chips">${chips.map(c=>`<span class="fd-chip">${esc(c)}</span>`).join('')}</div>
-     <div class="acts"><a class="btn sm" href="${esc(maps)}" target="_blank" rel="noopener">Google Maps</a>${p.phone?`<a class="btn sm line" href="tel:${esc(p.phone.replace(/[^\d+]/g,''))}">โทร</a>`:''}${p.web?`<a class="btn sm line" href="${esc(p.web)}" target="_blank" rel="noopener noreferrer">เว็บ</a>`:''}</div></div></article>`;
+     <div class="acts"><button class="btn sm ${spotOf(p)?'':'line'}" data-addspot="${esc(spotKey(p))}">${spotOf(p)?'แอดแล้ว ✓':'แอด'}</button><a class="btn sm line" href="${esc(maps)}" target="_blank" rel="noopener">Google Maps</a>${p.phone?`<a class="btn sm line" href="tel:${esc(p.phone.replace(/[^\d+]/g,''))}">โทร</a>`:''}${p.web?`<a class="btn sm line" href="${esc(p.web)}" target="_blank" rel="noopener noreferrer">เว็บ</a>`:''}</div></div></article>`;
 }
 // Click-and-drag scrolling for the horizontal rows (touch screens already scroll by swiping, a mouse can't)
 function dragScroll(el){
@@ -916,12 +950,72 @@ function dragScroll(el){
   el.addEventListener('pointerup',end);el.addEventListener('pointercancel',end);el.addEventListener('lostpointercapture',end);
   el.addEventListener('click',e=>{if(moved){e.preventDefault();e.stopPropagation();moved=false}},true);   // a drag is not a click
 }
+/* the wheel: every restaurant the group added, one spin picks one */
+function sheetWheel(){
+  const rand=n=>{const a=new Uint32Array(1);crypto.getRandomValues(a);return a[0]/4294967296*n};
+  let rot=0,spinning=false,anim=0;
+  openSheet('วงล้อสุ่มร้าน',`
+   <div class="wheel-wrap"><i class="wheel-pin" aria-hidden="true"></i><canvas id="wh-c" width="600" height="600" aria-label="วงล้อร้านอาหาร"></canvas></div>
+   <div id="wh-res" class="wheel-res" aria-live="polite"></div>
+   <button class="btn block" id="wh-go">หมุนเลย</button>
+   <div style="display:flex;gap:8px"><input class="inp" id="wh-in" placeholder="เพิ่มร้านเอง เช่น ข้าวมันไก่ปากซอย" maxlength="80" enterkeyhint="done"><button class="btn line" id="wh-add">แอด</button></div>
+   <div id="wh-list" class="box list"></div>
+   <button class="btn line block" id="wh-back">ไปหาร้านเพิ่ม</button>`,sh=>{
+    const $q=s=>sh.querySelector(s),cv=$q('#wh-c'),cx=cv.getContext('2d'),W=cv.width,R=W/2-6;
+    const cs=getComputedStyle(document.documentElement);
+    const ink=cs.getPropertyValue('--ink').trim()||'#222',canvas=cs.getPropertyValue('--canvas').trim()||'#fff';
+    const draw=()=>{
+      const L=spotList(),n=L.length;cx.clearRect(0,0,W,W);cx.save();cx.translate(W/2,W/2);
+      if(!n){cx.fillStyle=cs.getPropertyValue('--fog').trim()||'#eee';cx.beginPath();cx.arc(0,0,R,0,7);cx.fill();cx.fillStyle=ink;cx.font='600 30px "Noto Sans Thai",sans-serif';cx.textAlign='center';cx.fillText('ยังไม่มีร้านในวงล้อ',0,10);cx.restore();return}
+      const a=Math.PI*2/n;
+      L.forEach((x,i)=>{
+        cx.beginPath();cx.moveTo(0,0);cx.arc(0,0,R,rot+i*a,rot+(i+1)*a);cx.closePath();
+        cx.fillStyle=`hsl(${(i*137.5)%360} ${n>1?62:0}% ${i%2?58:66}%)`;cx.fill();cx.lineWidth=3;cx.strokeStyle=canvas;cx.stroke();
+        cx.save();cx.rotate(rot+(i+.5)*a);cx.textAlign='right';cx.fillStyle='#1b1b1b';
+        cx.font=`600 ${n>14?22:28}px "Noto Sans Thai",sans-serif`;
+        const t=x.name.length>14?x.name.slice(0,13)+'…':x.name;cx.fillText(t,R-24,9);cx.restore();
+      });
+      cx.beginPath();cx.arc(0,0,26,0,7);cx.fillStyle=canvas;cx.fill();cx.lineWidth=4;cx.strokeStyle=ink;cx.stroke();
+      cx.restore();
+    };
+    const list=()=>{
+      const L=spotList();
+      $q('#wh-list').innerHTML=L.length?L.map(x=>`<div class="row"><div class="grow"><div class="t">${esc(x.name)}</div><div class="muted">${esc(x.kind||'')}${x.kind&&D.people[x.by]?' · ':''}${D.people[x.by]?'แอดโดย '+esc(D.people[x.by].name):''}</div></div>${x.lat!=null?`<a class="x" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(x.name+' '+x.lat+','+x.lng)}" target="_blank" rel="noopener" aria-label="เปิดแผนที่">${ic('pin',15)}</a>`:''}<button class="x" data-rm="${x.id}" aria-label="เอา ${esc(x.name)} ออก">${ic('x',15)}</button></div>`).join(''):'<div class="empty" style="background:none">แอดร้านจากหน้าค้นหา หรือพิมพ์ชื่อร้านด้านบน อย่างน้อย 2 ร้านถึงจะหมุนได้</div>';
+      $q('#wh-go').disabled=spinning||L.length<2;draw();
+    };
+    list();
+    $q('#wh-list').onclick=async e=>{const b=e.target.closest('[data-rm]');if(!b||spinning)return;await del('spots',b.dataset.rm);$q('#wh-res').textContent='';list()};
+    const addOwn=async()=>{const i=$q('#wh-in'),name=i.value.trim();if(!name)return;
+      if(spotList().some(x=>x.name.toLowerCase()===name.toLowerCase())){toast('มีร้านนี้ในวงล้อแล้ว');return}
+      i.value='';if(await put('spots',{id:uid(),name,kind:'',lat:null,lng:null})!==false)list()};
+    $q('#wh-add').onclick=addOwn;$q('#wh-in').onkeydown=e=>{if(e.key==='Enter')addOwn()};
+    $q('#wh-back').onclick=sheetFood;
+    $q('#wh-go').onclick=()=>{
+      const L=spotList(),n=L.length;if(n<2||spinning)return;
+      const a=Math.PI*2/n,win=Math.floor(rand(n));
+      // land the middle of the winning slice (give or take a bit inside it) under the pin at the top
+      const target=Math.PI*1.5-(win+.5+(rand(.7)-.35))*a+Math.PI*2*Math.ceil((rot+Math.PI*2*5)/(Math.PI*2));
+      const from=rot,dur=matchMedia('(prefers-reduced-motion: reduce)').matches?300:4600,t0=performance.now();
+      spinning=true;$q('#wh-go').disabled=true;$q('#wh-res').textContent='';
+      const step=now=>{
+        if(!cv.isConnected){spinning=false;return}
+        const k=Math.min(1,(now-t0)/dur);rot=from+(target-from)*(1-Math.pow(1-k,4));draw();
+        if(k<1){anim=requestAnimationFrame(step);return}
+        spinning=false;rot%=Math.PI*2;const w=L[win];
+        $q('#wh-res').innerHTML=`<div class="label">วันนี้กิน</div><b>${esc(w.name)}</b>${w.lat!=null?`<a class="btn sm" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(w.name+' '+w.lat+','+w.lng)}" target="_blank" rel="noopener">เปิดแผนที่</a>`:''}`;
+        $q('#wh-go').textContent='หมุนใหม่';$q('#wh-go').disabled=false;
+      };
+      anim=requestAnimationFrame(step);
+    };
+  });
+}
 function sheetFood(){
   const t=trip();
   let size=Math.min(50,Math.max(1,t.members.length)),rad=LS.get('sp-foodr',1000),loc=LS.get('sp-foodloc',null),last=null,all=false,picked=new Set();
   rad=Math.min(10000,Math.max(1000,Math.round((+rad||1000)/500)*500));   // the slider goes 1–10 km in half-km steps
   if(!(loc&&Number.isFinite(loc.lat)&&Number.isFinite(loc.lng)))loc=null;
   openSheet('ไปกินที่ไหนดี',`
+   <button class="btn line block" id="fd-wheel">${ic('shuffle',16)} วงล้อสุ่มร้าน (<span id="fd-wn">${spotList().length}</span>)</button>
    <div class="kv" style="justify-content:space-between"><div><div class="label">กินกี่คน</div><b class="num" id="fd-n" style="font-size:22px"></b></div>
      <div style="display:flex;gap:8px"><button class="btn sm line" id="fd-m" aria-label="ลดจำนวนคน">−</button><button class="btn sm line" id="fd-p" aria-label="เพิ่มจำนวนคน">+</button></div></div>
    <div style="display:grid;gap:8px"><span class="label">เลือกสถานที่</span>
@@ -986,6 +1080,17 @@ function sheetFood(){
       }
     };
     const setLoc=l=>{loc=l;LS.set('sp-foodloc',l);drawLoc();run()};
+    $q('#fd-wheel').onclick=sheetWheel;
+    $q('#fd-out').addEventListener('click',async e=>{
+      const b=e.target.closest('[data-addspot]');if(!b||!last)return;
+      const p=last.find(x=>spotKey(x)===b.dataset.addspot);if(!p)return;
+      const have=spotOf(p);
+      b.disabled=true;
+      const ok=have?await del('spots',have.id):await put('spots',{id:uid(),name:p.name,kind:(p.cuisine.map(c=>FOOD_TH[c]||'')[0])||'',lat:p.lat,lng:p.lng});
+      b.disabled=false;if(!sh.isConnected)return;
+      if(ok!==false){const on=!!spotOf(p);b.textContent=on?'แอดแล้ว ✓':'แอด';b.classList.toggle('line',!on);if(on)toast('แอด '+p.name+' เข้าวงล้อแล้ว')}
+      $q('#fd-wn').textContent=spotList().length;
+    });
     $q('#fd-again').onclick=run;
     $q('#fd-m').onclick=()=>{if(size>1){size--;drawN();drawResults()}};
     $q('#fd-p').onclick=()=>{if(size<50){size++;drawN();drawResults()}};
@@ -1161,6 +1266,7 @@ document.addEventListener('click',async e=>{
     case 'scan':return sheetScan();
     case 'groups':return sheetGroups();
     case 'retry':return load(curId,true);
+    case 'myPay':return sheetPerson(null);
     case 'leave':return leaveLocal(curId);
   }
 });

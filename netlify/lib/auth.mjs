@@ -1,7 +1,7 @@
 // Accounts: password hashing, signed session tokens and input rules. Pure Node, no Netlify imports.
 import { scrypt, randomBytes, timingSafeEqual, createHmac } from "node:crypto";
 import { promisify } from "node:util";
-import { HttpError } from "./groups.mjs";
+import { HttpError, cleanPhoto } from "./groups.mjs";
 
 const scryptAsync = promisify(scrypt);
 const KEYLEN = 64;
@@ -56,10 +56,18 @@ export function checkPassword(v) {
 }
 
 const str = (v, max) => String(v ?? "").trim().slice(0, max);
-// An account receives money by exactly one method: PromptPay ("pp") or a bank account ("bank").
 export function cleanProfile(p = {}) {
+  const out = cleanPayment(p);
+  const img = cleanPhoto(p.img);
+  return img ? { ...out, img } : out;
+}
+
+// An account receives money by exactly one method: PromptPay ("pp") or a bank account ("bank").
+function cleanPayment(p = {}) {
   const name = str(p.name, 30);
   if (!name) throw new HttpError(400, "bad_name");
+  // Someone who arrives through an invite may add how to pay them later.
+  if (p.later === true && !String(p.pp || "").replace(/\D/g, "") && !str(p.bank, 40) && !str(p.acct, 30)) return { name, pay: "pp", pp: "", bank: "", acct: "" };
   const pay = p.pay === "bank" ? "bank" : p.pay === "pp" ? "pp" : (String(p.pp || "") ? "pp" : "bank");
   if (pay === "pp") {
     const pp = String(p.pp || "").replace(/\D/g, "");
