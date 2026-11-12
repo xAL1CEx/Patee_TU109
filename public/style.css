@@ -280,3 +280,14 @@ button.av{padding:0;cursor:pointer;font:inherit}
 .fd-body .fd-add{margin-top:auto}
 .fd-body .fd-add+.acts{margin-top:8px;padding-top:0}
 .fd-add.on{background:var(--ok);color:var(--on)}
+/* native feel on phones: no double-tap zoom, no rubber-band bounce, no long-press menus on buttons and pictures */
+html,body{overscroll-behavior-y:none;-webkit-tap-highlight-color:transparent}
+a,button,summary,select,label,input[type=range],[data-do],[data-open],[data-tab]{touch-action:manipulation}
+button,.btn,.av,.x,.tabs button,img,canvas,svg{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+img{-webkit-user-drag:none}
+/* admin dashboard */
+.adm-bars{display:grid;grid-template-columns:repeat(14,1fr);gap:3px;align-items:end;height:100px}
+.adm-col{display:grid;justify-items:center;align-content:end;gap:2px;font-size:10px;color:var(--ink3);min-width:0}
+.adm-col b{font-size:11px;font-weight:600;color:var(--ink);height:14px;line-height:14px}
+.adm-col i{display:block;width:100%;max-width:18px;background:var(--blue);border-radius:3px 3px 0 0}
+.adm-col span{letter-spacing:-.04em;white-space:nowrap}

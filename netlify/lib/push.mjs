@@ -45,20 +45,20 @@ export function eventsOf(before, after, actorUid) {
   const out = [], mem = after.members || {};
   const name = id => mem[id]?.name || "เพื่อน";
   const uidOf = id => mem[id]?.uid;
-  // The notification reads: group name on top, who did it, then what happened.
+  // Four lines on iOS: group name / "from Splitly" (added by iOS) / who / what happened.
   const add = (id, who, msg) => { const uid = uidOf(id); if (uid && uid !== actorUid) out.push({ uid, title: after.name, body: `${name(who)}\n${msg}`, gid: after.id }); };
 
   for (const [id, e] of Object.entries(after.expenses || {})) {
     if (before.expenses?.[id]) continue;
-    for (const [k, v] of Object.entries(e.split || {})) if (k !== e.payer) add(k, e.payer, `เพิ่มรายการ ${e.title} · ส่วนของคุณ ${baht(v)}`);
+    for (const [k, v] of Object.entries(e.split || {})) if (k !== e.payer) add(k, e.payer, `เพิ่ม ${e.title} · ส่วนของคุณ ${baht(v)}`);
   }
   for (const [id, p] of Object.entries(after.payments || {})) {
     const was = before.payments?.[id];
-    if (!was && !p.confirmed) add(p.to, p.from, `โอนเงินให้คุณ ${baht(p.amount)} · กดยืนยันว่าได้รับแล้ว`);
-    else if ((!was && p.confirmed) || (was && !was.confirmed && p.confirmed)) add(p.from, p.to, `ยืนยันการรับเงินแล้ว ${baht(p.amount)} · หักจากยอดค้างของคุณแล้ว`);
+    if (!was && !p.confirmed) add(p.to, p.from, `โอนให้คุณ ${baht(p.amount)} · กดยืนยันว่าได้รับ`);
+    else if ((!was && p.confirmed) || (was && !was.confirmed && p.confirmed)) add(p.from, p.to, `ยืนยันรับเงิน ${baht(p.amount)} แล้ว`);
   }
   for (const [id, r] of Object.entries(after.reminders || {})) {
-    if (!before.reminders?.[id]) add(r.to, r.from, `ทวงเงิน ${baht(r.amount)} ที่ยังค้างอยู่`);
+    if (!before.reminders?.[id]) add(r.to, r.from, `ทวงเงิน ${baht(r.amount)}`);
   }
   return out;
 }
@@ -71,7 +71,7 @@ export async function notify(users, events, send) {
     let doSend = send;
     if (!doSend) {
       const { publicKey, privateKey } = await vapidKeys(users);
-      doSend = (sub, payload) => webpush.sendNotification(sub, payload, { TTL: 86400, vapidDetails: { subject: process.env.URL || "https://splitly-tu109.netlify.app", publicKey, privateKey } });
+      doSend = (sub, payload) => webpush.sendNotification(sub, payload, { TTL: 259200, urgency: "high", vapidDetails: { subject: process.env.URL || "https://splitly-tu109.netlify.app", publicKey, privateKey } });
     }
     const byUid = new Map();
     for (const e of events) byUid.set(e.uid, [...(byUid.get(e.uid) || []), e]);

@@ -5,7 +5,8 @@
 //   POST /api/auth/login     {username, password}
 //   POST /api/auth/logout
 //   POST /api/auth/password  {current, next}                 change password, signs out other devices
-//   GET  /api/me                                             account, profile and group list
+//   GET  /api/me                                             account, profile and group list (isAdmin for the admin account)
+//   GET  /api/admin/stats                                    account statistics (admin account only)
 //   PUT  /api/me             {profile}                       update profile
 // Groups (signed in)
 //   POST   /api/groups                      create          -> {group}
@@ -69,6 +70,32 @@ async function secretOf(users) {
 }
 
 const userKey = u => "user:" + u;
+
+// The one account allowed to see the statistics. Set ADMIN_USERNAME to use another name.
+const adminName = () => (process.env.ADMIN_USERNAME || "admin").toLowerCase();
+const isAdmin = u => u.username === adminName();
+
+// Accounts: how many in total, how many are new, and who they are. Never includes passwords or payment details.
+async function adminStats(stores) {
+  const keys = (await stores.users.list({ prefix: "user:" })).blobs.map(b => b.key);
+  const users = [];
+  for (let i = 0; i < keys.length; i += 25)
+    users.push(...(await Promise.all(keys.slice(i, i + 25).map(k => stores.users.get(k, { type: "json" })))).filter(Boolean));
+  const now = Date.now(), DAY = 864e5, TZ = 7 * 36e5;   // days are counted in Thai time
+  const day = t => new Date(t + TZ).toISOString().slice(0, 10);
+  const at = u => Date.parse(u.createdAt) || 0;
+  const perDay = Object.fromEntries(Array.from({ length: 14 }, (_, i) => [day(now - i * DAY), 0]));
+  for (const u of users) { const d = day(at(u)); if (d in perDay) perDay[d]++; }
+  const since = n => users.filter(u => at(u) >= now - n * DAY).length;
+  return {
+    total: users.length,
+    today: users.filter(u => day(at(u)) === day(now)).length,
+    last7: since(7), last30: since(30),
+    perDay: Object.entries(perDay).map(([date, n]) => ({ date, n })).reverse(),
+    groups: (await stores.groups.list()).blobs.length,
+    accounts: users.sort((a, b) => at(b) - at(a)).map(u => ({ username: u.username, name: u.profile?.name || "", createdAt: u.createdAt, groups: (u.groups || []).length })),
+  };
+}
 const publicUser = u => ({ id: u.id, username: u.username, profile: u.profile });
 
 async function issue(req, users, user, status = 200, extra = {}) {
@@ -154,7 +181,7 @@ export async function handle(req, stores, deps = {}) {
     const me = await currentUser(req, users);
 
     if (seg[1] === "me" && seg.length === 2) {
-      if (M === "GET") return json({ user: publicUser(me), groups: await groupList(stores, me) });
+      if (M === "GET") return json({ user: publicUser(me), groups: await groupList(stores, me), ...(isAdmin(me) ? { isAdmin: true } : {}) });
       if (M === "PUT") {
         const { profile } = await readBody(req);
         const p = cleanProfile(profile);
@@ -162,6 +189,12 @@ export async function handle(req, stores, deps = {}) {
         return json({ user: publicUser({ ...me, profile: p }) });
       }
       return json({ error: "method_not_allowed" }, 405);
+    }
+
+    /* ---------- admin statistics (looks like any unknown address to everyone else) ---------- */
+    if (seg[1] === "admin") {
+      if (!isAdmin(me) || seg[2] !== "stats" || M !== "GET") return json({ error: "not_found" }, 404);
+      return json(await adminStats(stores));
     }
 
     /* ---------- phone notifications (Web Push) ---------- */

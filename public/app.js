@@ -85,6 +85,7 @@ function pctSplit(ps,amt){
 function eqSplit(ids,amt){const s={},n=ids.length,cents=Math.round(amt*100),b=Math.floor(cents/n);ids.forEach((id,i)=>s[id]=(b+(i<cents-b*n?1:0))/100);return s}
 
 /* ================= account state (from server) ================= */
+let isAdmin=false;      // the admin account sees a statistics screen
 let user=null;          // {id, username, profile}
 let profile=null;       // user.profile: {name,pp,bank,acct}
 let groups=[];          // [{id,name,kind,dates}] groups this account belongs to
@@ -92,7 +93,7 @@ let authed=null;        // null = checking, false = signed out, true = signed in
 let authTab='login';
 let curId=LS.get('sp-cur',null);   // last opened group on this device (convenience only)
 const entry=id=>groups.find(g=>g.id===id);
-function setUser(u,list){user=u;profile=u?u.profile:null;authed=!!u;if(list)groups=list}
+function setUser(u,list,adm){user=u;profile=u?u.profile:null;authed=!!u;if(list)groups=list;if(adm!==undefined)isAdmin=!!adm;if(!u)isAdmin=false}
 
 /* ================= group state (from server) ================= */
 let G=null, me=null, loading=false, loadErr=null, offline=false, pending=null, busy=0;
@@ -142,7 +143,7 @@ const pollEvery=()=>{const idle=Date.now()-lastAct;return idle<60e3?POLL_MS:idle
 const wake=()=>{const was=Date.now()-lastAct;lastAct=Date.now();if(was>=900e3&&G&&document.visibilityState==='visible'){lastPoll=Date.now();load(G.id)}};
 ['pointerdown','keydown','touchstart','scroll'].forEach(e=>addEventListener(e,wake,{passive:true,capture:true}));
 setInterval(()=>{if(document.visibilityState!=='visible'||!G||busy||pending)return;if(Date.now()-lastPoll<pollEvery()-500)return;lastPoll=Date.now();load(G.id)},POLL_MS);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&G){lastPoll=Date.now();load(G.id)}});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&G){lastPoll=Date.now();load(G.id);if(Date.now()-(+LS.get('sp-pushchk',0))>6*36e5){LS.set('sp-pushchk',Date.now());syncPush()}}});
 
 /* writes: apply locally right away, then send to the server one batch at a time */
 function localApply(g,ops){
@@ -378,7 +379,7 @@ async function submitAuth(form){
   }catch(err){btn.disabled=false;toast(AUTH_ERR[err.code]||'ทำรายการไม่สำเร็จ ลองใหม่อีกครั้ง')}
 }
 async function afterSignIn(u){
-  const r=await api('/me');setUser(r.user,r.groups);G=null;
+  const r=await api('/me');setUser(r.user,r.groups,r.isAdmin);G=null;syncPush();
   if(pending){await startJoin({id:pending.id,token:pending.token});return}
   const first=entry(curId)?curId:groups[0]?.id;
   if(first)load(first);else render();
@@ -683,6 +684,27 @@ function sheetMembers(){
    });
 }
 
+/* admin only: how many accounts there are, how many are new, and who they are */
+async function sheetAdmin(){
+  openSheet('แดชบอร์ดผู้ดูแล','<div class="empty" style="background:none"><div class="spin"></div>กำลังโหลด…</div>');
+  const body=$('.sheet');
+  try{
+    const r=await api('/admin/stats');
+    if(!body.isConnected)return;
+    const mx=Math.max(1,...r.perDay.map(d=>d.n));
+    const dm=d=>{const [,m,x]=d.split('-');return +x+'/'+ +m};
+    const when=iso=>{const d=new Date(Date.parse(iso)+7*36e5);return d.toISOString().slice(8,10)+'/'+d.toISOString().slice(5,7)+'/'+d.toISOString().slice(2,4)+' '+d.toISOString().slice(11,16)};
+    openSheet('แดชบอร์ดผู้ดูแล',`
+     <div class="stats"><div class="stat"><span class="label">บัญชีทั้งหมด</span><b class="num">${r.total}</b></div><div class="stat"><span class="label">ใหม่วันนี้</span><b class="num">${r.today}</b></div>
+      <div class="stat"><span class="label">ใหม่ 7 วัน</span><b class="num">${r.last7}</b></div><div class="stat"><span class="label">ใหม่ 30 วัน</span><b class="num">${r.last30}</b></div></div>
+     <div class="muted">กลุ่มทั้งหมด ${r.groups} กลุ่ม · วันนับตามเวลาไทย</div>
+     <div><div class="label" style="margin-bottom:6px">สมัครใหม่ 14 วันล่าสุด</div>
+      <div class="adm-bars" role="img" aria-label="จำนวนบัญชีใหม่รายวัน">${r.perDay.map((d,i)=>`<div class="adm-col"><b class="num">${d.n||''}</b><i style="height:${Math.round(d.n/mx*56)+2}px${d.n?'':';opacity:.35'}"></i><span>${(r.perDay.length-1-i)%2?'':dm(d.date)}</span></div>`).join('')}</div></div>
+     <div class="label">ทุกบัญชี (ใหม่สุดก่อน)</div>
+     <div class="box list">${r.accounts.map(a=>`<div class="row"><div class="grow"><div class="t">@${esc(a.username)}${a.name?' · '+esc(a.name):''}</div><div class="muted">สมัคร ${when(a.createdAt)} · ${a.groups} กลุ่ม</div></div></div>`).join('')}</div>`);
+  }catch(e){if(body.isConnected)openSheet('แดชบอร์ดผู้ดูแล','<div class="empty">เปิดไม่ได้ ลองใหม่อีกครั้ง</div>')}
+}
+
 /* a profile photo is shrunk to a small square on the phone (about 4 KB) so it can travel with every group */
 async function shrinkPhoto(file){
   const url=URL.createObjectURL(file);
@@ -697,6 +719,25 @@ async function shrinkPhoto(file){
     }
     throw new Error('too big');
   }finally{URL.revokeObjectURL(url)}
+}
+
+async function pushSubscribe(reg){
+  const {key}=await api('/push/key');
+  const raw=atob(key.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-key.length%4)%4));
+  return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:Uint8Array.from(raw,c=>c.charCodeAt(0))});
+}
+// Notifications can quietly stop after a long time without opening the app (the phone's push service drops or replaces the
+// subscription, or the server forgot it). So every time the app is opened on a device that has them on, check and re-register.
+async function syncPush(){
+  try{
+    if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)||Notification.permission!=='granted')return;
+    if(LS.get('sp-push',null)===false)return;                           // turned off on purpose
+    const reg=await navigator.serviceWorker.ready;
+    let sub=await reg.pushManager.getSubscription();
+    if(!sub){if(LS.get('sp-push',null)!==true)return;sub=await pushSubscribe(reg)}   // the old one is gone: take a new one
+    await api('/push/subscribe',{method:'POST',body:JSON.stringify({sub:sub.toJSON()})});
+    LS.set('sp-push',true);
+  }catch(e){}
 }
 
 /* turn phone notifications on or off for this device (needs the app on the home screen on iPhone) */
@@ -715,13 +756,11 @@ async function pushBox(box){
   t.onclick=async()=>{
     t.disabled=true;
     try{
-      if(on){if(sub){await api('/push/unsubscribe',{method:'POST',body:JSON.stringify({endpoint:sub.endpoint})});await sub.unsubscribe()}toast('ปิดแจ้งเตือนแล้ว')}
+      if(on){LS.set('sp-push',false);if(sub){await api('/push/unsubscribe',{method:'POST',body:JSON.stringify({endpoint:sub.endpoint})});await sub.unsubscribe()}toast('ปิดแจ้งเตือนแล้ว')}
       else{
         if(await Notification.requestPermission()!=='granted'){toast('ไม่ได้รับอนุญาตให้แจ้งเตือน');return pushBox(box)}
-        const {key}=await api('/push/key');
-        const raw=atob(key.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-key.length%4)%4));
-        sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:Uint8Array.from(raw,c=>c.charCodeAt(0))});
-        await api('/push/subscribe',{method:'POST',body:JSON.stringify({sub:sub.toJSON()})});toast('เปิดแจ้งเตือนแล้ว');
+        sub=await pushSubscribe(reg);
+        await api('/push/subscribe',{method:'POST',body:JSON.stringify({sub:sub.toJSON()})});LS.set('sp-push',true);toast('เปิดแจ้งเตือนแล้ว');
       }
     }catch(e){toast('ตั้งค่าแจ้งเตือนไม่สำเร็จ ลองใหม่อีกครั้ง')}
     pushBox(box);
@@ -733,6 +772,7 @@ function sheetPerson(id){
   // Codex: place appearance controls directly after profile/payment fields so the setting is easy to find.
   openSheet(isMe?'บัญชีของคุณ':'ข้อมูลของ '+p.name,`${isMe?`<div class="kv"><button type="button" class="av xl me" id="pf-photo" aria-label="เปลี่ยนรูปโปรไฟล์">${avInner(profile)}</button><div class="grow"><div class="label">ชื่อผู้ใช้</div><b>@${esc(user.username)}</b><div style="display:flex;gap:12px"><button type="button" class="link" id="pf-pick">เปลี่ยนรูป</button><button type="button" class="link" id="pf-unpick" ${profile.img?'':'hidden'}>ลบรูป</button></div></div><input type="file" id="pf-file" accept="image/*" hidden></div>`:''}
    ${personFields(p,'pf',isMe)}
+   ${isMe&&isAdmin?'<button class="btn line block" id="pf-admin" type="button">แดชบอร์ดผู้ดูแล</button>':''}
    ${isMe?themePicker():''}
    ${isMe?'<div class="box" id="pn-box" style="padding:12px 14px;display:grid;gap:8px"></div>':''}
    ${isMe?'<p class="muted" style="margin:0">ใช้กับบัญชีของคุณทุกเครื่อง และอัปเดตให้กลุ่มที่กำลังดูอยู่</p>':''}
@@ -744,6 +784,7 @@ function sheetPerson(id){
      <button class="btn line" type="submit">เปลี่ยนรหัสผ่าน</button><p class="note" style="margin:0">เครื่องอื่นที่ล็อกอินอยู่จะถูกออกจากระบบ</p></form></details>
      <button class="btn danger block" id="pf-out">ออกจากระบบ</button>`:''}`,sh=>{
     if(isMe)pushBox(sh.querySelector('#pn-box'));
+    const ab=sh.querySelector('#pf-admin');if(ab)ab.onclick=sheetAdmin;
     let img=isMe?(profile.img||''):'';
     if(isMe){
       const file=sh.querySelector('#pf-file'),ph=sh.querySelector('#pf-photo'),un=sh.querySelector('#pf-unpick');
@@ -976,7 +1017,7 @@ function sheetWheel(){
         cx.save();cx.rotate(flip?mid+Math.PI:mid);cx.textAlign=flip?'right':'left';cx.textBaseline='middle';cx.fillStyle='#1b1b1b';
         const room=R-54-22;let px=n>14?24:30,t=x.name;
         cx.font=`600 ${px}px "Noto Sans Thai",sans-serif`;
-        while(cx.measureText(t).width>room&&px>18){px-=2;cx.font=`600 ${px}px "Noto Sans Thai",sans-serif`}
+        while(cx.measureText(t).width>room&&px>16){px-=2;cx.font=`600 ${px}px "Noto Sans Thai",sans-serif`}
         while(cx.measureText(t).width>room&&t.length>2)t=t.slice(0,-2)+'…';   // still too long: cut it
         cx.fillText(t,flip?-54:54,2);cx.restore();
       });
@@ -989,6 +1030,9 @@ function sheetWheel(){
       $q('#wh-go').disabled=spinning||L.length<2;draw();
     };
     list();
+    // The page fonts load lazily for a canvas. Names are measured with whatever font is there at the time,
+    // so draw again once the real fonts are in (otherwise long Thai names get cut short on some phones).
+    if(document.fonts&&document.fonts.load)Promise.all([document.fonts.load('600 24px "Noto Sans Thai"','ก้า'),document.fonts.load('600 24px "Open Sans"','Ab')]).then(()=>{if(cv.isConnected&&!spinning)draw()},()=>{});
     $q('#wh-list').onclick=async e=>{const b=e.target.closest('[data-rm]');if(!b||spinning)return;await del('spots',b.dataset.rm);$q('#wh-res').textContent='';list()};
     const addOwn=async()=>{const i=$q('#wh-in'),name=i.value.trim();if(!name)return;
       if(spotList().some(x=>x.name.toLowerCase()===name.toLowerCase())){toast('มีร้านนี้ในวงล้อแล้ว');return}
@@ -1285,7 +1329,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSheet()});
   const j=parseJoin(location.href);
   if(j)pending={...j,group:null,err:null};
   render();
-  try{const r=await api('/me');setUser(r.user,r.groups)}
+  try{const r=await api('/me');setUser(r.user,r.groups,r.isAdmin);syncPush()}
   catch(err){
     if(err.status===401){setUser(null,[]);render();return}
     authed=false;render();toast('เชื่อมต่อไม่ได้ ตรวจอินเทอร์เน็ตแล้วรีเฟรช');return;

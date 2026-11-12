@@ -494,7 +494,7 @@ await test("phone notifications: devices subscribe, and only the other people he
   const eid = "n" + Math.random().toString(36).slice(2, 10);
   await t2("POST", `/api/groups/${gid}/ops`, { ops: [{ op: "put", col: "expenses", id: eid, doc: { id: eid, title: "ข้าวเย็น", amount: 200, payer: view.me, split: { [view.me]: 100, [praeId]: 100 } } }] });
   assert.deepEqual(sent.map(x => x.to), ["https://push.test/prae"]);   // the dead device was dropped, the payer was not told about their own action
-  assert.match(sent[0].body, /^ต้น\nเพิ่มรายการ ข้าวเย็น/);
+  assert.match(sent[0].body, /^ต้น\nเพิ่ม ข้าวเย็น/);
   assert.equal(sent[0].url, "/?g=" + gid);
   assert.equal((await p2("POST", "/api/push/status", { endpoint: "https://push.test/dead" })).body.on, false);
   sent.length = 0;
@@ -545,6 +545,25 @@ await test("restaurant wheel list: any member adds and removes places, names are
   for (let i = 0; i < 40; i++) await put(ton, "x" + i, { name: "ร้าน " + i });
   assert.equal((await put(ton, "overflow", { name: "เกิน" })).body.error, "too_many_spots");
   assert.equal((await stranger("POST", `/api/groups/${g.id}/ops`, { ops: [{ op: "del", col: "spots", id: "s2" }] })).status, 404);
+});
+
+await test("admin statistics: only the admin account sees them, and no secrets are included", async () => {
+  const boss = phone();
+  await boss("POST", "/api/auth/register", { username: "admin", password: "adminpass1", profile: { name: "ผู้ดูแล", pp: "0811111111" } });
+  assert.equal((await ton("GET", "/api/admin/stats")).status, 404);
+  assert.equal((await phone()("GET", "/api/admin/stats")).status, 401);   // signed out
+  assert.equal((await ton("GET", "/api/me")).body.isAdmin, undefined);
+  assert.equal((await boss("GET", "/api/me")).body.isAdmin, true);
+  const r = (await boss("GET", "/api/admin/stats")).body;
+  assert.ok(r.total >= 3 && r.today === r.total && r.last7 === r.total && r.last30 === r.total);
+  assert.equal(r.accounts.length, r.total);
+  assert.equal(r.accounts[0].username, "admin");   // newest first
+  assert.equal(r.perDay.length, 14);
+  assert.equal(r.perDay.reduce((a, d) => a + d.n, 0), r.total);
+  assert.ok(r.groups >= 1);
+  const text = JSON.stringify(r);
+  assert.ok(!/pass|0811111111|acct|bank|"pp"/.test(text), "no passwords or payment details");
+  assert.equal((await boss("POST", "/api/admin/stats")).status, 404);
 });
 
 await test("logout clears the cookie", async () => {

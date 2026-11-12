@@ -14,6 +14,7 @@ export function memStore() {
       return { modified: true, etag };
     },
     async delete(key) { m.delete(key); },
+    async list({ prefix = "" } = {}) { return { blobs: [...m.keys()].filter(k => k.startsWith(prefix)).map(key => ({ key })) }; },
     _map: m,
   };
 }
