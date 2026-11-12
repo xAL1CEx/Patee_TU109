@@ -1323,6 +1323,9 @@ document.addEventListener('click',async e=>{
 document.addEventListener('submit',e=>{if(e.target.id==='authForm'){e.preventDefault();submitAuth(e.target)}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSheet()});
 
+/* iOS Safari still pinch-zooms despite the viewport settings; stop the gesture itself */
+['gesturestart','gesturechange','gestureend'].forEach(e=>document.addEventListener(e,ev=>ev.preventDefault()));
+
 /* ================= boot ================= */
 (async function boot(){
   pending=null;

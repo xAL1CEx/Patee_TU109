@@ -281,7 +281,7 @@ button.av{padding:0;cursor:pointer;font:inherit}
 .fd-body .fd-add+.acts{margin-top:8px;padding-top:0}
 .fd-add.on{background:var(--ok);color:var(--on)}
 /* native feel on phones: no double-tap zoom, no rubber-band bounce, no long-press menus on buttons and pictures */
-html,body{overscroll-behavior-y:none;-webkit-tap-highlight-color:transparent}
+html,body{overscroll-behavior-y:none;-webkit-tap-highlight-color:transparent;touch-action:pan-x pan-y}   /* scrolling yes, pinch-zoom no */
 a,button,summary,select,label,input[type=range],[data-do],[data-open],[data-tab]{touch-action:manipulation}
 button,.btn,.av,.x,.tabs button,img,canvas,svg{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 img{-webkit-user-drag:none}
